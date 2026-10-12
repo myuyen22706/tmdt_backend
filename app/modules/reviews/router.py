@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from app.core.database import get_db
 from app.core.responses import APIResponse
+from app.modules.reviews.models import Review
 
 router = APIRouter(prefix="/reviews", tags=["Product Reviews & Sizing Feedback"])
 
@@ -16,59 +19,56 @@ class ReviewCreate(BaseModel):
     bought_size: str
 
 
-class ReviewResponse(ReviewCreate):
-    id: str
-    created_at: datetime
-
-
-MOCK_REVIEWS = [
-    {
-        "id": "rev-1",
-        "product_id": "prod-vovinam-standard",
-        "user_name": "Phụ huynh bé Tuấn",
-        "rating": 5,
-        "comment": "Vải dày dặn, thấm mồ hôi tốt. Bé 1m35 nặng 33kg mặc Size 2 vừa vặn rất đẹp!",
-        "size_fit": "fit",
-        "bought_size": "Size 2",
-        "created_at": datetime.now(timezone.utc),
-    },
-    {
-        "id": "rev-2",
-        "product_id": "prod-vovinam-standard",
-        "user_name": "Trần Thanh",
-        "rating": 5,
-        "comment": "Được tư vấn size chuẩn xác, giao hàng nhanh.",
-        "size_fit": "fit",
-        "bought_size": "Size 4 (M)",
-        "created_at": datetime.now(timezone.utc),
-    },
-]
-
-
-@router.get("", response_model=APIResponse[List[ReviewResponse]])
-async def list_reviews(product_id: Optional[str] = None):
-    """Lấy danh sách đánh giá sản phẩm (lọc theo product_id)."""
-    items = MOCK_REVIEWS
+@router.get("")
+async def list_reviews(product_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """Lấy danh sách đánh giá sản phẩm từ cơ sở dữ liệu."""
+    query = db.query(Review)
     if product_id:
-        items = [r for r in items if r["product_id"] == product_id]
+        query = query.filter(Review.product_id == product_id)
+    items = query.order_by(Review.created_at.desc()).all()
+
+    data = [
+        {
+            "id": r.id,
+            "product_id": r.product_id,
+            "user_name": r.user_name,
+            "rating": r.rating,
+            "comment": r.comment,
+            "size_fit": r.size_fit,
+            "bought_size": r.bought_size,
+            "created_at": r.created_at,
+        }
+        for r in items
+    ]
     return APIResponse(
         success=True,
         message="Lấy danh sách đánh giá thành công",
-        data=items,
+        data=data,
     )
 
 
-@router.post("", response_model=APIResponse[ReviewResponse])
-async def create_review(req: ReviewCreate):
-    """Đăng đánh giá sản phẩm kèm nhận xét độ vừa vặn của size."""
-    new_rev = {
-        "id": f"rev-{len(MOCK_REVIEWS) + 1}",
-        "created_at": datetime.now(timezone.utc),
-        **req.model_dump(),
-    }
-    MOCK_REVIEWS.append(new_rev)
+@router.post("")
+async def create_review(req: ReviewCreate, db: Session = Depends(get_db)):
+    """Gửi đánh giá sản phẩm kèm độ vừa vặn của size vào database."""
+    rev = Review(
+        product_id=req.product_id,
+        user_name=req.user_name,
+        rating=req.rating,
+        comment=req.comment,
+        size_fit=req.size_fit,
+        bought_size=req.bought_size,
+    )
+    db.add(rev)
+    db.commit()
+    db.refresh(rev)
+
     return APIResponse(
         success=True,
         message="Gửi đánh giá thành công",
-        data=new_rev,
+        data={
+            "id": rev.id,
+            "user_name": rev.user_name,
+            "rating": rev.rating,
+            "size_fit": rev.size_fit,
+        },
     )

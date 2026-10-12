@@ -1,9 +1,19 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api import api_router
 from app.core.config import settings
+from app.core.database import init_db
 from app.core.exceptions import AppException
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Khởi tạo schema và bảng khi ứng dụng khởi động
+    init_db()
+    yield
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -12,6 +22,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 # Setup CORS middleware

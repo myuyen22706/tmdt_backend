@@ -1,26 +1,57 @@
-"""Database setup and session manager.
-Cấu hình sẵn sàng cho SQLAlchemy / SQLite / PostgreSQL khi nhóm bắt đầu cắm DB.
-"""
+import logging
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 from app.core.config import settings
 
-try:
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import declarative_base, sessionmaker
+logger = logging.getLogger("vo_ecommerce.database")
 
-    connect_args = {"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
-    engine = create_engine(settings.DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base = declarative_base()
+Base = declarative_base()
 
-    def get_db():
-        """Dependency for getting DB session."""
-        db = SessionLocal()
+def get_engine():
+    db_url = settings.DATABASE_URL
+    connect_args = {}
+    
+    # Check if SQL Server
+    if "mssql" in db_url:
+        # MSSQL connection configuration
+        connect_args = {
+            "timeout": 15,
+        }
         try:
-            yield db
-        finally:
-            db.close()
+            engine = create_engine(
+                db_url,
+                connect_args=connect_args,
+                pool_pre_ping=True,
+                pool_size=10,
+                max_overflow=20,
+            )
+            # Test ping
+            with engine.connect() as conn:
+                logger.info("Connected to Microsoft SQL Server successfully!")
+            return engine
+        except Exception as e:
+            logger.warning(
+                f"SQL Server chưa kết nối được ({e}). Tạm thời sử dụng SQLite cục bộ để server hoạt động. "
+                "Sau khi bạn bật SQL Server, cấu hình lại DATABASE_URL trong file .env."
+            )
+            fallback_url = "sqlite:///./vo_ecommerce_dev.db"
+            return create_engine(fallback_url, connect_args={"check_same_thread": False})
+    elif "sqlite" in db_url:
+        return create_engine(db_url, connect_args={"check_same_thread": False})
+    else:
+        return create_engine(db_url, pool_pre_ping=True)
 
-except ImportError:
-    # Fallback khi chưa cài sqlalchemy
-    Base = object
-    get_db = None
+engine = get_engine()
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_db():
+    """FastAPI Dependency for database session."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def init_db():
+    """Tạo toàn bộ bảng trong SQL Server / Database theo models đã khai báo."""
+    Base.metadata.create_all(bind=engine)

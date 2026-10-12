@@ -1,52 +1,32 @@
-from datetime import datetime, timezone
-from typing import List, Optional
-from fastapi import APIRouter
-from pydantic import BaseModel
+from typing import List
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from app.core.database import get_db
 from app.core.responses import APIResponse
+from app.modules.blog.models import BlogPost
 
 router = APIRouter(prefix="/blog", tags=["Blog & SEO Guides"])
 
 
-class BlogPost(BaseModel):
-    id: str
-    title: str
-    slug: str
-    summary: str
-    content: str
-    thumbnail: str
-    category: str
-    created_at: datetime
-
-
-MOCK_POSTS = [
-    {
-        "id": "post-1",
-        "title": "Hướng dẫn cách thắt đai Vovinam và Karate đúng chuẩn",
-        "slug": "huong-dan-that-dai-vovinam-karate",
-        "summary": "Chi tiết từng bước thắt đai võ thuật giúp đai chặt, cân xứng hai đầu và thẩm mỹ khi biểu diễn tấn pháp.",
-        "content": "Nội dung bài viết hướng dẫn thắt đai...",
-        "thumbnail": "https://placehold.co/600x400?text=Huong+Dan+That+Dai",
-        "category": "Kỹ thuật",
-        "created_at": datetime.now(timezone.utc),
-    },
-    {
-        "id": "post-2",
-        "title": "Cách chọn võ phục và bảo quản võ phục không bị ố vàng",
-        "slug": "cach-chon-va-bao-quan-vo-phuc",
-        "summary": "Mẹo giặt võ phục cotton, xử lý mồ hôi và phơi đồ giúp bộ võ phục luôn trắng sáng tinh tươm.",
-        "content": "Nội dung mẹo giặt ủi...",
-        "thumbnail": "https://placehold.co/600x400?text=Bao+Quan+Vo+Phuc",
-        "category": "Cẩm nang",
-        "created_at": datetime.now(timezone.utc),
-    },
-]
-
-
-@router.get("", response_model=APIResponse[List[BlogPost]])
-async def list_posts():
-    """Lấy danh sách bài viết blog cẩm nang võ thuật."""
+@router.get("")
+async def list_posts(db: Session = Depends(get_db)):
+    """Lấy danh sách bài viết blog cẩm nang võ thuật từ database."""
+    posts = db.query(BlogPost).order_by(BlogPost.created_at.desc()).all()
+    data = [
+        {
+            "id": p.id,
+            "title": p.title,
+            "slug": p.slug,
+            "summary": p.summary,
+            "content": p.content,
+            "thumbnail": p.thumbnail,
+            "category": p.category,
+            "created_at": p.created_at,
+        }
+        for p in posts
+    ]
     return APIResponse(
         success=True,
         message="Lấy danh sách bài viết thành công",
-        data=MOCK_POSTS,
+        data=data,
     )
