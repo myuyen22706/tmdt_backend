@@ -5,6 +5,7 @@ from app.modules.blog.router import router as blog_router
 from app.modules.cart.router import router as cart_router
 from app.modules.dojos.router import router as dojos_router
 from app.modules.orders.router import router as orders_router
+from app.modules.payments.router import router as payments_router
 from app.modules.products.router import router as products_router
 from app.modules.promotions.router import router as promotions_router
 from app.modules.reviews.router import router as reviews_router
@@ -18,6 +19,7 @@ api_router.include_router(size_advisor_router)
 api_router.include_router(dojos_router)
 api_router.include_router(cart_router)
 api_router.include_router(orders_router)
+api_router.include_router(payments_router)
 api_router.include_router(auth_router)
 api_router.include_router(promotions_router)
 api_router.include_router(reviews_router)

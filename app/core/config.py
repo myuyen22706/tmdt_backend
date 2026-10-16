@@ -26,8 +26,14 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = "vo_ecommerce_atlas"
     DATABASE_URL: str = "sqlite:///./vo_ecommerce.db"  # Legacy fallback if needed
 
-    # MoMo & External Services
+    # MoMo Payment Gateway (Mục 7)
     MOMO_MOCK: bool = True
+    MOMO_PARTNER_CODE: str = "MOMOBKUN20180529"
+    MOMO_ACCESS_KEY: str = "klm05TvNBzhg7hSr"
+    MOMO_SECRET_KEY: str = "at67qH6mk8w5Y1nAyMoYKMWACiEi2Aca"
+    MOMO_ENDPOINT: str = "https://test-payment.momo.vn/v2/gateway/api/create"
+    MOMO_REDIRECT_URL: str = "http://localhost:3000/orders/payment-result"
+    MOMO_IPN_URL: str = "http://localhost:8000/api/v1/payments/momo/ipn"
 
     # Security Policies (Mục 9)
     MAX_FAILED_LOGIN_ATTEMPTS: int = 5
