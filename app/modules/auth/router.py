@@ -152,7 +152,21 @@ async def login(credentials: UserLogin, db: AsyncIOMotorDatabase = Depends(get_d
         {"$set": {"failed_login_attempts": 0, "locked_until": None, "updated_at": now}},
     )
 
-    token = create_access_token(subject=user["id"], role=user.get("role", "customer"))
+    # Ghi nhật ký đăng nhập quản trị (F23)
+    user_role = user.get("role", "customer")
+    if user_role in ["admin", "staff"]:
+        await db["activity_logs"].insert_one({
+            "id": f"log-{uuid.uuid4().hex[:8]}",
+            "actor": user.get("phone", user["id"]),
+            "actor_role": user_role,
+            "action": "ADMIN_LOGIN",
+            "target_type": "auth",
+            "target_id": user["id"],
+            "details": {"full_name": user["full_name"], "phone": user["phone"]},
+            "timestamp": now,
+        })
+
+    token = create_access_token(subject=user["id"], role=user_role)
 
     return APIResponse(
         success=True,

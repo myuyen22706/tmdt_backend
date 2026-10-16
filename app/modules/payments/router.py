@@ -362,6 +362,22 @@ async def mark_manual_refund(
         },
     )
 
+    # Ghi nhận Audit Log F23
+    from app.core.activity import record_activity
+    await record_activity(
+        db=db,
+        actor=current_user.get("phone", current_user.get("sub", "admin")),
+        actor_role=current_user.get("role", "admin"),
+        action="REFUND_ORDER",
+        target_type="payment",
+        target_id=payment_id,
+        details={
+            "order_code": payment.get("order_code"),
+            "amount": payment.get("amount"),
+            "reason": payload.reason,
+        },
+    )
+
     return APIResponse(
         success=True,
         message="Đã đánh dấu hoàn tiền thủ công thành công",

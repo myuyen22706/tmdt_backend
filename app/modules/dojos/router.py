@@ -108,6 +108,19 @@ async def approve_club(
         raise HTTPException(status_code=404, detail="Không tìm thấy võ đường")
 
     updated = await clubs_col.find_one({"id": club_id})
+
+    # Ghi nhận Audit Log F23
+    from app.core.activity import record_activity
+    await record_activity(
+        db=db,
+        actor=current_user.get("phone", current_user.get("sub", "admin")),
+        actor_role=current_user.get("role", "admin"),
+        action="APPROVE_DOJO" if action == "approve" else "REJECT_DOJO",
+        target_type="dojo",
+        target_id=club_id,
+        details={"status": new_status, "club_name": updated.get("name") if updated else None},
+    )
+
     return APIResponse(
         success=True,
         message=f"Đã duyệt võ đường sang trạng thái '{new_status}'",

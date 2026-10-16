@@ -339,6 +339,22 @@ async def update_order_status(
         },
     )
 
+    # Ghi nhận Audit Log F23
+    from app.core.activity import record_activity
+    await record_activity(
+        db=db,
+        actor=current_user.get("phone", current_user.get("sub", "staff")),
+        actor_role=current_user.get("role", "staff"),
+        action="CHANGE_ORDER_STATUS",
+        target_type="order",
+        target_id=order_code,
+        details={
+            "old_status": curr_status,
+            "new_status": new_status,
+            "note": payload.note,
+        },
+    )
+
     updated_order = await orders_col.find_one({"order_code": order_code})
     return APIResponse(
         success=True,
@@ -480,7 +496,7 @@ async def adjust_inventory(
             {"$inc": {"variants.$.stock": quantity_change}},
         )
 
-    # Ghi log biến động
+    # Ghi log biến động kho
     await movements_col.insert_one({
         "id": str(uuid.uuid4()),
         "product_id": product_id,
@@ -490,6 +506,22 @@ async def adjust_inventory(
         "performed_by": current_user.get("phone", "staff"),
         "created_at": now,
     })
+
+    # Ghi nhận Audit Log F23
+    from app.core.activity import record_activity
+    await record_activity(
+        db=db,
+        actor=current_user.get("phone", current_user.get("sub", "staff")),
+        actor_role=current_user.get("role", "staff"),
+        action="ADJUST_INVENTORY",
+        target_type="inventory",
+        target_id=sku,
+        details={
+            "product_id": product_id,
+            "quantity_change": quantity_change,
+            "reason": reason,
+        },
+    )
 
     return APIResponse(
         success=True,

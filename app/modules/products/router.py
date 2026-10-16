@@ -245,6 +245,23 @@ async def update_product(
     update_data = {k: v for k, v in payload.model_dump().items() if v is not None}
     update_data["updated_at"] = datetime.now(timezone.utc)
 
+    # Ghi nhận Audit Log F23 nếu có cập nhật giá sản phẩm
+    if payload.price is not None and payload.price != existing.get("price"):
+        from app.core.activity import record_activity
+        await record_activity(
+            db=db,
+            actor=current_user.get("phone", current_user.get("sub", "staff")),
+            actor_role=current_user.get("role", "staff"),
+            action="UPDATE_PRODUCT_PRICE",
+            target_type="product",
+            target_id=product_id,
+            details={
+                "product_name": existing.get("name"),
+                "old_price": existing.get("price"),
+                "new_price": payload.price,
+            },
+        )
+
     await products_col.update_one({"id": product_id}, {"$set": update_data})
     updated_doc = await products_col.find_one({"id": product_id})
 
