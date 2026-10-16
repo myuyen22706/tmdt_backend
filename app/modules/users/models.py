@@ -1,38 +1,48 @@
 from datetime import datetime, timezone
 import uuid
-from sqlalchemy import Column, String, Boolean, DateTime, Float, ForeignKey
-from sqlalchemy.orm import relationship
-from app.core.database import Base
+from typing import Optional, List
+from pydantic import BaseModel, Field, EmailStr
 
 
-class User(Base):
-    __tablename__ = "users"
+class StudentProfileDoc(BaseModel):
+    """Hồ sơ võ sinh (con 1, con 2) lưu môn võ, cấp đai và số đo để tư vấn size nhanh (F05)."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    student_name: str
+    birth_year: Optional[int] = None
+    martial_art: str  # vovinam, taekwondo, karate, vo_co_truyen
+    belt_rank: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    recommended_size: Optional[str] = None
+    measured_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    phone = Column(String(20), unique=True, index=True, nullable=False)
-    full_name = Column(String(100), nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(String(20), default="customer")  # customer, coach, admin, staff
-    email = Column(String(100), nullable=True)
-    address = Column(String(255), nullable=True)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    student_profiles = relationship("StudentProfile", back_populates="parent_user", cascade="all, delete-orphan")
+class UserDoc(BaseModel):
+    """Tài khoản người dùng lưu trong MongoDB (F01)."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    phone: str
+    full_name: str
+    hashed_password: str
+    role: str = "customer"  # customer, coach, staff, admin
+    email: Optional[str] = None
+    address: Optional[str] = None
+    failed_login_attempts: int = 0
+    locked_until: Optional[datetime] = None
+    reset_token: Optional[str] = None
+    reset_token_expires_at: Optional[datetime] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class StudentProfile(Base):
-    """Hồ sơ võ sinh (con 1, con 2) lưu môn võ, cấp đai và số đo để mua lại nhanh."""
-    __tablename__ = "student_profiles"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
-    student_name = Column(String(100), nullable=False)
-    martial_art = Column(String(50), nullable=False)  # vovinam, taekwondo, karate...
-    belt_rank = Column(String(50), nullable=True)
-    height_cm = Column(Float, nullable=True)
-    weight_kg = Column(Float, nullable=True)
-    recommended_size = Column(String(50), nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    parent_user = relationship("User", back_populates="student_profiles")
+class UserResponse(BaseModel):
+    id: str
+    phone: str
+    full_name: str
+    role: str
+    email: Optional[str] = None
+    address: Optional[str] = None
+    is_active: bool
+    created_at: datetime

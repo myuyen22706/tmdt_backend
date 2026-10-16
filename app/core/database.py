@@ -1,57 +1,108 @@
+import asyncio
 import logging
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from typing import Optional
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from app.core.config import settings
+
+from sqlalchemy.orm import declarative_base
 
 logger = logging.getLogger("vo_ecommerce.database")
 
 Base = declarative_base()
 
-def get_engine():
-    db_url = settings.DATABASE_URL
-    connect_args = {}
-    
-    # Check if SQL Server
-    if "mssql" in db_url:
-        # MSSQL connection configuration
-        connect_args = {
-            "timeout": 15,
-        }
-        try:
-            engine = create_engine(
-                db_url,
-                connect_args=connect_args,
-                pool_pre_ping=True,
-                pool_size=10,
-                max_overflow=20,
-            )
-            # Test ping
-            with engine.connect() as conn:
-                logger.info("Connected to Microsoft SQL Server successfully!")
-            return engine
-        except Exception as e:
-            logger.warning(
-                f"SQL Server chưa kết nối được ({e}). Tạm thời sử dụng SQLite cục bộ để server hoạt động. "
-                "Sau khi bạn bật SQL Server, cấu hình lại DATABASE_URL trong file .env."
-            )
-            fallback_url = "sqlite:///./vo_ecommerce_dev.db"
-            return create_engine(fallback_url, connect_args={"check_same_thread": False})
-    elif "sqlite" in db_url:
-        return create_engine(db_url, connect_args={"check_same_thread": False})
-    else:
-        return create_engine(db_url, pool_pre_ping=True)
+client: Optional[AsyncIOMotorClient] = None
+db: Optional[AsyncIOMotorDatabase] = None
+_is_mock: bool = False
 
-engine = get_engine()
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def get_db():
-    """FastAPI Dependency for database session."""
-    db = SessionLocal()
+async def connect_to_mongo():
+    global client, db, _is_mock
+    uri = settings.MONGODB_URI
+    db_name = settings.MONGODB_DB_NAME
+
     try:
-        yield db
-    finally:
-        db.close()
+        logger.info(f"Đang kết nối MongoDB Atlas: {uri[:25]}.../db={db_name}")
+        real_client = AsyncIOMotorClient(
+            uri,
+            serverSelectionTimeoutMS=4000,
+            connectTimeoutMS=4000,
+        )
+        # Kiểm tra kết nối thực tế bằng lệnh ping
+        await real_client.admin.command("ping")
+        client = real_client
+        db = client[db_name]
+        _is_mock = False
+        logger.info(">>> Kết nối MongoDB Atlas thành công! <<<")
+    except Exception as e:
+        logger.warning(
+            f"Chưa kết nối được MongoDB Atlas ({e}). "
+            "Khởi chạy chế độ Mongomock nội bộ để hệ thống hoạt động ổn định và sẵn sàng chạy test. "
+            "Sau khi điền chuỗi MONGODB_URI chính xác vào .env, hệ thống sẽ tự động lưu trữ trên MongoDB Atlas."
+        )
+        from mongomock_motor import AsyncMongoMockClient
 
-def init_db():
-    """Tạo toàn bộ bảng trong SQL Server / Database theo models đã khai báo."""
-    Base.metadata.create_all(bind=engine)
+        mock_client = AsyncMongoMockClient()
+        client = mock_client
+        db = client[db_name]
+        _is_mock = True
+
+
+async def close_mongo_connection():
+    global client
+    if client:
+        client.close()
+        logger.info("Đã đóng kết nối MongoDB.")
+
+
+def get_database() -> AsyncIOMotorDatabase:
+    global db
+    if db is None:
+        raise RuntimeError("Database chưa được khởi tạo. Hãy gọi connect_to_mongo() trước.")
+    return db
+
+
+async def get_db() -> AsyncIOMotorDatabase:
+    """FastAPI Dependency cung cấp database MongoDB."""
+    return get_database()
+
+
+async def init_db():
+    """Tạo các Index cần thiết trên MongoDB Atlas cho các collections."""
+    database = get_database()
+
+    try:
+        # 1. Collection 'users'
+        users_col = database["users"]
+        await users_col.create_index("phone", unique=True)
+        await users_col.create_index("email", unique=False, sparse=True)
+        await users_col.create_index("role")
+
+        # 2. Collection 'login_attempts' (Theo dõi brute force F01 / Mục 9)
+        login_attempts_col = database["login_attempts"]
+        await login_attempts_col.create_index("phone")
+        await login_attempts_col.create_index("created_at")
+
+        # 3. Collection 'products'
+        products_col = database["products"]
+        await products_col.create_index("slug", unique=True)
+        await products_col.create_index("martial_art_id")
+        await products_col.create_index("category_id")
+        await products_col.create_index("price")
+
+        # 4. Collection 'orders'
+        orders_col = database["orders"]
+        await orders_col.create_index("order_code", unique=True)
+        await orders_col.create_index("user_id")
+        await orders_col.create_index("status")
+        await orders_col.create_index("created_at")
+
+        # 5. Collection 'clubs' & 'club_campaigns'
+        clubs_col = database["clubs"]
+        await clubs_col.create_index("slug", unique=True, sparse=True)
+        campaigns_col = database["club_campaigns"]
+        await campaigns_col.create_index("club_id")
+        await campaigns_col.create_index("code", unique=True, sparse=True)
+
+        logger.info("Khởi tạo và đánh chỉ mục (indexes) MongoDB Atlas thành công.")
+    except Exception as e:
+        logger.warning(f"Lỗi khi khởi tạo indexes: {e}")

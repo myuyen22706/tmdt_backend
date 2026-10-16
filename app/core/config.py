@@ -21,8 +21,18 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
 
-    # Database
-    DATABASE_URL: str = "sqlite:///./vo_ecommerce.db"
+    # Database (MongoDB Atlas)
+    MONGODB_URI: str = "mongodb://localhost:27017"
+    MONGODB_DB_NAME: str = "vo_ecommerce_atlas"
+    DATABASE_URL: str = "sqlite:///./vo_ecommerce.db"  # Legacy fallback if needed
+
+    # MoMo & External Services
+    MOMO_MOCK: bool = True
+
+    # Security Policies (Mục 9)
+    MAX_FAILED_LOGIN_ATTEMPTS: int = 5
+    ACCOUNT_LOCKOUT_MINUTES: int = 15
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -4,15 +4,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api import api_router
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import connect_to_mongo, close_mongo_connection, init_db
 from app.core.exceptions import AppException
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Khởi tạo schema và bảng khi ứng dụng khởi động
-    init_db()
+    # Khởi tạo kết nối MongoDB và tạo các index
+    await connect_to_mongo()
+    await init_db()
     yield
+    await close_mongo_connection()
 
 
 app = FastAPI(
