@@ -1,45 +1,76 @@
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from app.modules.cart.schemas import CartItem
 
 
 class ShippingAddress(BaseModel):
-    full_name: str
-    phone: str
-    city_province: str
-    district: str
-    ward: str
-    street_address: str
+    recipient_name: str = Field(..., min_length=2, max_length=100, description="Họ tên người nhận")
+    phone: str = Field(..., min_length=9, max_length=15, description="Số điện thoại nhận hàng")
+    street_address: str = Field(..., min_length=3, description="Địa chỉ cụ thể (Số nhà, tên đường)")
+    ward: Optional[str] = Field("", description="Phường / Xã")
+    district: Optional[str] = Field("", description="Quận / Huyện")
+    city_province: str = Field(..., description="Tỉnh / Thành phố")
+
+
+class OrderItemCreate(BaseModel):
+    product_id: str
+    sku: str
+    product_name: str
+    size: str
+    color: str = "Trắng"
+    price: int = Field(..., ge=0, description="Đơn giá sản phẩm VND (số nguyên)")
+    quantity: int = Field(1, ge=1)
+    is_embroidered: bool = False
+    embroidery_name: Optional[str] = Field(None, max_length=20, description="Tên thêu (tối đa 20 ký tự)")
+    embroidery_fee: int = Field(default=0, ge=0, description="Phí thêu (30.000 VND / sản phẩm nếu có)")
 
 
 class OrderCreate(BaseModel):
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
     customer_email: Optional[str] = None
     shipping_address: ShippingAddress
-    payment_method: str = Field("VietQR", description="COD, VietQR, MoMo, ZaloPay")
+    payment_method: str = Field("COD", description="COD hoặc MoMo (Mục 6)")
+    items: List[OrderItemCreate] = Field(..., min_length=1)
     voucher_code: Optional[str] = None
-    items: List[CartItem]
+    note: Optional[str] = None
+    club_campaign_id: Optional[str] = None  # Giai đoạn 5 B2B
+
+
+class OrderStatusHistoryItem(BaseModel):
+    old_status: Optional[str] = None
+    new_status: str
+    changed_by: str
+    timestamp: datetime
     note: Optional[str] = None
 
 
 class OrderResponse(BaseModel):
     id: str
-    order_code: str
-    status: str = "PENDING"  # PENDING, CONFIRMED, PACKING, SHIPPING, COMPLETED, CANCELLED
+    order_code: str  # Dạng DT-YYYYMMDD-XXXX (Mục 6)
+    user_id: Optional[str] = None
+    channel: str = "retail"  # retail hoặc club
     customer_name: str
-    phone: str
+    customer_phone: str
+    customer_email: Optional[str] = None
     shipping_address_full: str
-    payment_method: str
-    payment_status: str = "UNPAID"  # UNPAID, PAID
-    items: List[CartItem]
-    subtotal: float
-    shipping_fee: float
-    discount_amount: float
-    total_amount: float
+    subtotal: int
+    shipping_fee: int
+    discount_amount: int = 0
+    embroidery_total: int = 0
+    total_amount: int
+    payment_method: str  # COD hoặc MoMo
+    payment_status: str  # unpaid, paid
+    status: str  # pending_payment, confirmed, processing, shipping, delivered, completed, cancelled
+    items: List[OrderItemCreate]
     tracking_code: Optional[str] = None
-    shipping_carrier: Optional[str] = "GHTK"
-    vietqr_url: Optional[str] = None
+    status_history: List[OrderStatusHistoryItem] = []
     created_at: datetime
+
+
+class OrderStatusUpdateRequest(BaseModel):
+    new_status: str = Field(..., description="confirmed, processing, shipping, delivered, completed, cancelled")
+    note: Optional[str] = None
 
 
 class SizeExchangeRequest(BaseModel):
@@ -47,5 +78,5 @@ class SizeExchangeRequest(BaseModel):
     product_id: str
     current_size: str
     desired_size: str
-    reason: str = Field(..., description="Chật ngực/vai, dài quần, muốn đổi rộng hơn...")
+    reason: str
     customer_note: Optional[str] = None
