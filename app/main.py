@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.api import api_router
 from app.core.config import settings
-from app.core.database import connect_to_mongo, close_mongo_connection, init_db
+from app.core.database import connect_to_mongo, close_mongo_connection, init_db, get_db
 from app.core.exceptions import AppException
+from app.core.middleware import RateLimitMiddleware, SecurityHeadersMiddleware
+from app.modules.seo.router import generate_robots_txt, generate_sitemap
 
 
 @asynccontextmanager
@@ -26,6 +28,10 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+# Mục 9: Security Headers & Rate Limiting Middleware
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
 
 # Setup CORS middleware
 app.add_middleware(
@@ -63,3 +69,14 @@ async def root():
 
 # Include all v1 API endpoints
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+
+# F24: Root endpoints cho Web Crawlers & Search Engines (SEO)
+@app.get("/sitemap.xml", include_in_schema=False)
+async def root_sitemap(response: Response, db=Depends(get_db)):
+    return await generate_sitemap(db=db)
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def root_robots():
+    return await generate_robots_txt()

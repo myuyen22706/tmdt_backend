@@ -5,7 +5,14 @@ from mongomock_motor import AsyncMongoMockClient
 
 import app.core.database as database_module
 from app.core.database import get_db, init_db
+from app.core.middleware import RateLimitMiddleware
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limit():
+    """Reset bộ nhớ Rate Limiting trước mỗi test case để tránh ảnh hưởng chéo."""
+    RateLimitMiddleware.reset()
 
 
 @pytest_asyncio.fixture(scope="function")

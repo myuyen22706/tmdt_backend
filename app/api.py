@@ -9,6 +9,7 @@ from app.modules.payments.router import router as payments_router
 from app.modules.products.router import router as products_router
 from app.modules.promotions.router import router as promotions_router
 from app.modules.reviews.router import router as reviews_router
+from app.modules.seo.router import router as seo_router
 from app.modules.size_advisor.router import router as size_advisor_router
 
 api_router = APIRouter()
@@ -25,3 +26,4 @@ api_router.include_router(promotions_router)
 api_router.include_router(reviews_router)
 api_router.include_router(blog_router)
 api_router.include_router(admin_router)
+api_router.include_router(seo_router)
