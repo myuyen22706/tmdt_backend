@@ -89,10 +89,11 @@ async def seed_data():
             })
     await db["size_charts"].insert_many(size_chart_docs)
 
-    # 4. Tài khoản mẫu Demo (1 Admin, 1 Staff, 2 Customers, 1 Coach)
-    print("4. Nạp 5 tài khoản mẫu phân quyền...")
+    # 4. Tài khoản mẫu Demo (Admin, Staff, Customers, Coach)
+    print("4. Nạp các tài khoản mẫu phân quyền (Cả đầu số 0909 và 0988)...")
     await db["users"].delete_many({})
     demo_users = [
+        # Bộ tài khoản 0909...
         {
             "id": "usr-admin-01",
             "phone": "0909000001",
@@ -152,6 +153,59 @@ async def seed_data():
             "hashed_password": hash_password("CoachPass123@"),
             "role": "coach",
             "email": "hlv.lamson@example.com",
+            "failed_login_attempts": 0,
+            "locked_until": None,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        # Bộ tài khoản 0988... (Khớp chính xác với các nút bấm 1-Click trên Frontend)
+        {
+            "id": "usr-admin-88",
+            "phone": "0988000001",
+            "full_name": "Tổng Quản Trị Hệ Thống (Admin)",
+            "hashed_password": hash_password("AdminPass123"),
+            "role": "admin",
+            "email": "admin88@daitrang.vn",
+            "failed_login_attempts": 0,
+            "locked_until": None,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "usr-staff-88",
+            "phone": "0988000002",
+            "full_name": "Điều Phối Đơn Hàng (Staff)",
+            "hashed_password": hash_password("StaffPass123"),
+            "role": "staff",
+            "email": "staff88@daitrang.vn",
+            "failed_login_attempts": 0,
+            "locked_until": None,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "usr-coach-88",
+            "phone": "0988000003",
+            "full_name": "HLV CLB Taekwondo Bạch Hổ",
+            "hashed_password": hash_password("CoachPass123"),
+            "role": "coach",
+            "email": "hlv88@daitrang.vn",
+            "failed_login_attempts": 0,
+            "locked_until": None,
+            "is_active": True,
+            "created_at": now,
+            "updated_at": now,
+        },
+        {
+            "id": "usr-cust-88",
+            "phone": "0988000004",
+            "full_name": "Khách Hàng Lê Minh Đức",
+            "hashed_password": hash_password("UserPass123"),
+            "role": "customer",
+            "email": "duc.le@example.com",
             "failed_login_attempts": 0,
             "locked_until": None,
             "is_active": True,
