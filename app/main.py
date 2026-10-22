@@ -15,6 +15,16 @@ async def lifespan(app: FastAPI):
     # Khởi tạo kết nối MongoDB và tạo các index
     await connect_to_mongo()
     await init_db()
+    if settings.AUTO_SEED_DB:
+        try:
+            database = await get_db()
+            users_count = await database["users"].count_documents({})
+            products_count = await database["products"].count_documents({})
+            if users_count == 0 or products_count == 0:
+                from app.seed_mongo import seed_data
+                await seed_data(target_db=database)
+        except Exception as e:
+            print(f"Auto-seed warning: {e}")
     yield
     await close_mongo_connection()
 
@@ -37,6 +47,7 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origin_regex=settings.BACKEND_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

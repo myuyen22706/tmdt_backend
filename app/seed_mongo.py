@@ -16,21 +16,24 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 
-async def seed_data():
-    uri = settings.MONGODB_URI
-    db_name = settings.MONGODB_DB_NAME
-    print(f"=== Đang kết nối tới MongoDB: {uri[:30]}... / {db_name} ===")
+async def seed_data(target_db=None):
+    if target_db is not None:
+        db = target_db
+    else:
+        uri = settings.MONGODB_URI
+        db_name = settings.MONGODB_DB_NAME
+        print(f"=== Đang kết nối tới MongoDB: {uri[:30]}... / {db_name} ===")
 
-    try:
-        client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=4000)
-        await client.admin.command("ping")
-        db = client[db_name]
-        print(">>> Kết nối MongoDB Atlas thành công! <<<")
-    except Exception as e:
-        print(f"Không thể kết nối Atlas ({e}), khởi chạy Mongomock...")
-        from mongomock_motor import AsyncMongoMockClient
-        client = AsyncMongoMockClient()
-        db = client[db_name]
+        try:
+            client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=4000)
+            await client.admin.command("ping")
+            db = client[db_name]
+            print(">>> Kết nối MongoDB Atlas thành công! <<<")
+        except Exception as e:
+            print(f"Không thể kết nối Atlas ({e}), khởi chạy Mongomock...")
+            from mongomock_motor import AsyncMongoMockClient
+            client = AsyncMongoMockClient()
+            db = client[db_name]
 
     now = datetime.now(timezone.utc)
 
@@ -321,6 +324,114 @@ async def seed_data():
             "created_at": now,
         }
     ])
+
+    # 7. Nạp bài viết Blog & Cẩm nang võ sinh
+    print("7. Nạp bài viết Blog & Cẩm nang võ thuật...")
+    await db["blog_posts"].delete_many({})
+    await db["blog_posts"].insert_many([
+        {
+            "id": "post-1",
+            "title": "Hướng Dẫn Buộc Đai Vovinam & Karate Đúng Chuẩn Liên Đoàn",
+            "slug": "huong-dan-that-dai-vovinam-karate",
+            "summary": "Từng bước hướng dẫn thắt đai cân đối hai đầu, siết chặt vừa vặn vạt áo và tạo thẩm mỹ uy phong khi biểu diễn quyền pháp.",
+            "content": "Nội dung hướng dẫn chi tiết cách thắt đai Vovinam, Karate đúng quy chuẩn Liên đoàn...",
+            "thumbnail": "/vovi.jpg",
+            "category": "Kỹ Thuật Võ Đạo",
+            "is_published": True,
+            "created_at": now,
+        },
+        {
+            "id": "post-2",
+            "title": "Mẹo Giặt & Bảo Quản Võ Phục Cotton Trắng Sáng, Không Ố Vàng",
+            "slug": "meo-giat-bao-quan-vo-phuc",
+            "summary": "Cách ngâm nước lạnh với giấm trắng khử mồ hôi muối, tránh phơi nắng gắt trực tiếp giúp sợi vải Kaki luôn bền chắc và đứng form.",
+            "content": "Nội dung cẩm nang giặt và bảo quản võ phục Kaki 100% Cotton...",
+            "thumbnail": "/vovi.jpg",
+            "category": "Cẩm Nang Võ Sinh",
+            "is_published": True,
+            "created_at": now,
+        },
+        {
+            "id": "post-3",
+            "title": "Phân Biệt Quy Cách Võ Phục 4 Môn: Vovinam, Taekwondo, Karate, Cổ Truyền",
+            "slug": "phan-biet-quy-cach-vo-phuc-4-mon",
+            "summary": "Hiểu rõ sự khác biệt giữa áo cổ chữ V (Taekwondo), áo vạt chéo xanh lam (Vovinam), áo trắng nút chéo (Karate) và áo nút thắt (Cổ Truyền).",
+            "content": "Nội dung phân biệt quy cách võ phục các môn phái...",
+            "thumbnail": "/vovi.jpg",
+            "category": "Kiến Thức Võ Thuật",
+            "is_published": True,
+            "created_at": now,
+        },
+    ])
+
+    # 8. Nạp mã giảm giá Vouchers & Khuyến mãi
+    print("8. Nạp mã giảm giá Vouchers...")
+    await db["vouchers"].delete_many({})
+    await db["vouchers"].insert_many([
+        {
+            "id": "vouc-01",
+            "code": "VOVINAM10",
+            "discount_type": "PERCENT",
+            "discount_value": 10,
+            "min_order_amount": 300000,
+            "usage_limit": 100,
+            "used_count": 0,
+            "is_active": True,
+            "created_at": now,
+        },
+        {
+            "id": "vouc-02",
+            "code": "TANBINH20",
+            "discount_type": "FIXED",
+            "discount_value": 20000,
+            "min_order_amount": 200000,
+            "usage_limit": 100,
+            "used_count": 0,
+            "is_active": True,
+            "created_at": now,
+        },
+    ])
+
+    # 9. Nạp CLB Võ Đường & Đợt gom đơn B2B mẫu
+    print("9. Nạp CLB Võ Đường & Chiến dịch gom đơn B2B mẫu...")
+    await db["clubs"].delete_many({})
+    await db["clubs"].insert_one({
+        "id": "dojo-phudong",
+        "club_name": "CLB Vovinam Phù Đổng",
+        "martial_art_id": "vovinam",
+        "address": "Số 45 Lê Lợi, Quận 1, TP. Hồ Chí Minh",
+        "coach_name": "Võ sư Nguyễn Văn Hùng",
+        "coach_phone": "0987654321",
+        "coach_email": "hung.phudong@daitrang.vn",
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    await db["club_campaigns"].delete_many({})
+    await db["club_campaigns"].insert_one({
+        "id": "camp-phudong2026",
+        "campaign_code": "PHUDONG2026",
+        "club_id": "dojo-phudong",
+        "club_name": "CLB Vovinam Phù Đổng",
+        "campaign_title": "Đợt Đặt Đồng Phục Khóa Hè – CLB Vovinam Phù Đổng",
+        "applicable_product_ids": ["prod-vov-01"],
+        "target_quantity": 30,
+        "discount_percent": 15,
+        "deadline": now,
+        "has_custom_logo": True,
+        "allow_club_consolidated_payment": True,
+        "campaign_url": f"{settings.FRONTEND_URL.rstrip('/')}/dojo/PHUDONG2026",
+        "qr_code_url": f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={settings.FRONTEND_URL.rstrip('/')}/dojo/PHUDONG2026",
+        "status": "open",
+        "total_ordered": 3,
+        "total_amount": 760000,
+        "deposit_amount": 0,
+        "deposit_paid": False,
+        "remaining_amount_paid": False,
+        "created_at": now,
+        "updated_at": now,
+    })
 
     print("=== NẠP DỮ LIỆU MẪU MONGODB ATLAS HOÀN TẤT THÀNH CÔNG! ===")
 

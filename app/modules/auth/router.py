@@ -250,7 +250,7 @@ async def forgot_password(
 
     # In ra console ở môi trường phát triển theo đúng đặc tả F01
     recipient = user.get("email") or user.get("phone")
-    reset_link = f"http://localhost:3000/reset-password?token={reset_token}"
+    reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={reset_token}"
     otp_code = reset_token[:6].upper()
 
     console_msg = (

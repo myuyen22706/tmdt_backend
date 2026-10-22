@@ -75,7 +75,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.headers.get("X-Bypass-Rate-Limit") == "true":
             return await call_next(request)
 
-        client_ip = request.client.host if request.client else "127.0.0.1"
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client else "127.0.0.1"
         now = time.time()
         path = request.url.path
 

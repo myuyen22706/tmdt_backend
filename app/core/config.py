@@ -1,4 +1,5 @@
 from typing import List, Union
+import json
 from pydantic import AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,12 +10,38 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
+    # URLs cho Frontend & Backend (phục vụ tạo link chia sẻ, SEO, Redirect)
+    FRONTEND_URL: str = "http://localhost:3000"
+    BACKEND_URL: str = "http://localhost:8000"
+
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = [
+    BACKEND_CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
+    BACKEND_CORS_ORIGIN_REGEX: str = r"https://.*\.vercel\.app"
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return ["*"]
+            if v.startswith("["):
+                try:
+                    return json.loads(v)
+                except Exception:
+                    pass
+            return [i.strip() for i in v.split(",") if i.strip()]
+        elif isinstance(v, list):
+            return v
+        return ["*"]
+
+    # Tự động nạp dữ liệu mẫu khi database rỗng
+    AUTO_SEED_DB: bool = True
+
 
     # JWT Security
     SECRET_KEY: str = "dev-insecure-secret-key-change-in-prod"

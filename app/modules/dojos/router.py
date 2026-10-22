@@ -157,7 +157,8 @@ async def create_campaign(
 
     discount_percent = _calculate_discount_tier(payload.target_quantity)
     code = f"CP-{club.get('martial_art_id', 'VO')[:3].upper()}-{datetime.now().strftime('%Y%m')}-{uuid.uuid4().hex[:4].upper()}"
-    campaign_url = f"http://localhost:3000/clubs/campaign/{code}"
+    from app.core.config import settings
+    campaign_url = f"{settings.FRONTEND_URL.rstrip('/')}/clubs/campaign/{code}"
     qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={campaign_url}"
 
     campaign_id = f"cmp-{uuid.uuid4().hex[:8]}"

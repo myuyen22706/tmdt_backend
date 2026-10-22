@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.database import get_db
 from app.core.responses import APIResponse
-from app.modules.promotions.models import Voucher
 
 router = APIRouter(prefix="/promotions", tags=["Promotions & Vouchers"])
 
@@ -14,12 +13,13 @@ class VoucherValidateRequest(BaseModel):
 
 
 @router.post("/validate")
-async def validate_voucher(req: VoucherValidateRequest, db: Session = Depends(get_db)):
-    """Kiểm tra mã giảm giá từ database."""
-    voucher = db.query(Voucher).filter(
-        Voucher.code == req.code.upper(),
-        Voucher.is_active == True,
-    ).first()
+async def validate_voucher(req: VoucherValidateRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+    """Kiểm tra mã giảm giá từ database MongoDB."""
+    vouchers_col = db["vouchers"]
+    voucher = await vouchers_col.find_one({
+        "code": req.code.upper(),
+        "is_active": True,
+    })
 
     if not voucher:
         return APIResponse(
@@ -28,25 +28,28 @@ async def validate_voucher(req: VoucherValidateRequest, db: Session = Depends(ge
             data={"is_valid": False, "discount_amount": 0},
         )
 
-    if req.order_amount < float(voucher.min_order_amount):
+    min_order = float(voucher.get("min_order_amount", 0))
+    if req.order_amount < min_order:
         return APIResponse(
             success=False,
-            message=f"Đơn hàng phải từ {int(voucher.min_order_amount):,}₫ để sử dụng mã này",
+            message=f"Đơn hàng phải từ {int(min_order):,}₫ để sử dụng mã này",
             data={"is_valid": False, "discount_amount": 0},
         )
 
-    discount = 0
-    if voucher.discount_type == "PERCENT":
-        discount = req.order_amount * (float(voucher.discount_value) / 100)
+    discount = 0.0
+    discount_val = float(voucher.get("discount_value", 0))
+    if voucher.get("discount_type") == "PERCENT":
+        discount = req.order_amount * (discount_val / 100)
     else:
-        discount = float(voucher.discount_value)
+        discount = discount_val
 
     return APIResponse(
         success=True,
         message="Áp dụng mã giảm giá thành công",
         data={
-            "code": voucher.code,
+            "code": voucher.get("code"),
             "discount_amount": discount,
             "is_valid": True,
         },
     )
+

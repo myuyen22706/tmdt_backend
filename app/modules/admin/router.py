@@ -625,6 +625,24 @@ async def export_revenue_csv(
     """F22: Xuất báo cáo đơn hàng & doanh thu ra file CSV chuẩn UTF-8 BOM.
     (Chỉ dành cho Admin, Staff truy cập bị chặn 403).
     """
+    return await _generate_revenue_csv(db)
+
+
+@router.get("/revenue-report/csv", include_in_schema=False)
+async def export_revenue_csv_public_link(
+    token_payload: Optional[dict] = Depends(get_current_user_token),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Hỗ trợ xuất CSV từ liên kết trực tiếp trên trang Admin UI."""
+    if token_payload and token_payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chỉ Quản trị viên (Admin) mới có quyền xuất báo cáo doanh thu.",
+        )
+    return await _generate_revenue_csv(db)
+
+
+async def _generate_revenue_csv(db: AsyncIOMotorDatabase) -> Response:
     orders_col = db["orders"]
     cursor = orders_col.find({}).sort("created_at", -1)
     orders = await cursor.to_list(length=2000)
