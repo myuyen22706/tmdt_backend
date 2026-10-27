@@ -1,14 +1,14 @@
 import asyncio
 import logging
+import ssl
 from typing import Optional
+
+import certifi
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+
 from app.core.config import settings
 
-from sqlalchemy.orm import declarative_base
-
 logger = logging.getLogger("vo_ecommerce.database")
-
-Base = declarative_base()
 
 client: Optional[AsyncIOMotorClient] = None
 db: Optional[AsyncIOMotorDatabase] = None
@@ -16,6 +16,11 @@ _is_mock: bool = False
 
 
 async def connect_to_mongo():
+    """Kết nối MongoDB Atlas với TLS context dùng CA bundle của certifi.
+    Vì Python 3.9 trên Windows có OpenSSL cũ, bắt tay TLS 1.2+ với Atlas có thể fail
+    nếu dùng cert store mặc định của hệ thống. Dùng certifi + đồng thời ép TLS 1.2
+    tối thiểu giải quyết lỗi TLSV1_ALERT_INTERNAL_ERROR.
+    """
     global client, db, _is_mock
     uri = settings.MONGODB_URI
     db_name = settings.MONGODB_DB_NAME
@@ -24,8 +29,10 @@ async def connect_to_mongo():
         logger.info(f"Đang kết nối MongoDB Atlas: {uri[:25]}.../db={db_name}")
         real_client = AsyncIOMotorClient(
             uri,
-            serverSelectionTimeoutMS=4000,
-            connectTimeoutMS=4000,
+            tls=True,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=8000,
+            connectTimeoutMS=8000,
         )
         # Kiểm tra kết nối thực tế bằng lệnh ping
         await real_client.admin.command("ping")
