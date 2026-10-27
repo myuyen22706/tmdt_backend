@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     MOMO_REDIRECT_URL: str = "http://localhost:3000/orders/payment-result"
     MOMO_IPN_URL: str = "http://localhost:8000/api/v1/payments/momo/ipn"
 
+    # Phí thêu tên võ sinh (F07), dùng chung cho giỏ hàng và đặt hàng
+    EMBROIDERY_FEE: int = 30000
+
+    # Cache-Control cho các endpoint catalog công khai (giây)
+    PUBLIC_CACHE_MAX_AGE: int = 60
+
     # Security Policies (Mục 9)
     MAX_FAILED_LOGIN_ATTEMPTS: int = 5
     ACCOUNT_LOCKOUT_MINUTES: int = 15

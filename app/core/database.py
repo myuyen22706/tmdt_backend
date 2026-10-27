@@ -27,8 +27,10 @@ async def connect_to_mongo():
             serverSelectionTimeoutMS=4000,
             connectTimeoutMS=4000,
         )
-        # Kiểm tra kết nối thực tế bằng lệnh ping
+        # Kiểm tra kết nối thực tế bằng lệnh ping, sau đó thử một lệnh cần quyền đọc:
+        # ping vẫn thành công với MongoDB bật xác thực khi thiếu tài khoản, khiến mọi truy vấn sau đó lỗi.
         await real_client.admin.command("ping")
+        await real_client[db_name].list_collection_names()
         client = real_client
         db = client[db_name]
         _is_mock = False
@@ -88,6 +90,9 @@ async def init_db():
         await products_col.create_index("martial_art_id")
         await products_col.create_index("category_id")
         await products_col.create_index("price")
+        await products_col.create_index([("is_active", 1), ("martial_art_id", 1), ("category_id", 1)])
+        await products_col.create_index([("is_active", 1), ("created_at", -1)])
+        await products_col.create_index("variants.sku")
 
         # 4. Collection 'orders'
         orders_col = database["orders"]
@@ -102,6 +107,16 @@ async def init_db():
         campaigns_col = database["club_campaigns"]
         await campaigns_col.create_index("club_id")
         await campaigns_col.create_index("code", unique=True, sparse=True)
+
+        # 6. Giỏ hàng được truy vấn theo user_id / session_id ở mọi thao tác
+        carts_col = database["carts"]
+        await carts_col.create_index("user_id", sparse=True)
+        await carts_col.create_index("session_id", sparse=True)
+
+        # 7. Voucher, đánh giá, bài viết
+        await database["vouchers"].create_index("code")
+        await database["reviews"].create_index("product_id")
+        await database["blog_posts"].create_index("slug")
 
         logger.info("Khởi tạo và đánh chỉ mục (indexes) MongoDB Atlas thành công.")
     except Exception as e:

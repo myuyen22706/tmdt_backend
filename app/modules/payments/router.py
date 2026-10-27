@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_token, require_role
 from app.core.responses import APIResponse
@@ -211,6 +212,11 @@ async def mock_momo_callback(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Mục 7: Giả lập gọi IPN MoMo khi MOMO_MOCK=True phục vụ demo và kiểm thử tự động."""
+    if not settings.MOMO_MOCK:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chỉ dùng được khi bật chế độ MOMO_MOCK",
+        )
     orders_col = db["orders"]
     order = await orders_col.find_one({"order_code": payload.order_code})
     if not order:

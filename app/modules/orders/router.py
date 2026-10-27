@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_token, require_role
 from app.core.responses import APIResponse
@@ -31,6 +32,24 @@ VALID_TRANSITIONS = {
 }
 
 
+def _normalize_phone(value: Optional[str]) -> str:
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
+def _check_order_access(order: dict, token_payload: Optional[dict], phone: Optional[str]) -> None:
+    """Chống IDOR: chỉ nhân viên, chủ tài khoản đặt đơn, hoặc khách vãng lai nhập đúng SĐT đặt hàng mới xem/hủy được đơn."""
+    if token_payload:
+        if token_payload.get("role", "customer") in ["admin", "staff"]:
+            return
+        if order.get("user_id") and order.get("user_id") == token_payload.get("sub"):
+            return
+    if phone and _normalize_phone(phone) == _normalize_phone(order.get("customer_phone")):
+        return
+    if not token_payload and not phone:
+        raise HTTPException(status_code=401, detail="Nhập số điện thoại đặt hàng để xem đơn này")
+    raise HTTPException(status_code=403, detail="Không có quyền truy cập đơn hàng này")
+
+
 def _generate_order_code() -> str:
     """Sinh mã đơn theo định dạng chuẩn Mục 6: DT-YYYYMMDD-XXXX."""
     date_str = datetime.now().strftime("%Y%m%d")
@@ -41,7 +60,8 @@ def _generate_order_code() -> str:
 def _format_order(doc: dict) -> OrderResponse:
     addr = doc.get("shipping_address", {})
     if isinstance(addr, dict):
-        addr_str = f"{addr.get('street_address', '')}, {addr.get('ward', '')}, {addr.get('district', '')}, {addr.get('city_province', '')}"
+        parts = [addr.get("street_address"), addr.get("ward"), addr.get("district"), addr.get("city_province")]
+        addr_str = ", ".join(str(part).strip() for part in parts if part and str(part).strip())
     else:
         addr_str = str(addr)
 
@@ -57,6 +77,7 @@ def _format_order(doc: dict) -> OrderResponse:
         subtotal=int(doc.get("subtotal", 0)),
         shipping_fee=int(doc.get("shipping_fee", 0)),
         discount_amount=int(doc.get("discount_amount", 0)),
+        voucher_code=doc.get("voucher_code"),
         embroidery_total=int(doc.get("embroidery_total", 0)),
         total_amount=int(doc.get("total_amount", 0)),
         payment_method=doc.get("payment_method", "COD"),
@@ -94,14 +115,82 @@ async def create_order(
             detail="Đơn hàng có sản phẩm thêu tên riêng yêu cầu thanh toán trước (MoMo), không áp dụng hình thức COD (Mục 2 & F07).",
         )
 
-    # 2. Tính toán tiền hàng và phí thêu
+    # 2. Định giá phía máy chủ: lấy tên, size, đơn giá từ CSDL, không tin giá client gửi lên
+    product_ids = list({item.product_id for item in payload.items})
+    product_docs = await products_col.find({"id": {"$in": product_ids}}).to_list(length=len(product_ids))
+    products_by_id = {p["id"]: p for p in product_docs}
+
     subtotal = 0
     embroidery_total = 0
     for item in payload.items:
-        item_price = int(item.price)
-        emb_fee = int(item.embroidery_fee) if item.is_embroidered else 0
-        subtotal += item_price * item.quantity
-        embroidery_total += emb_fee * item.quantity
+        product = products_by_id.get(item.product_id)
+        if not product or not product.get("is_active", True):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Sản phẩm '{item.product_name or item.product_id}' không còn kinh doanh",
+            )
+        variant = next((v for v in product.get("variants", []) if v.get("sku") == item.sku), None)
+        if not variant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Biến thể SKU '{item.sku}' không tồn tại",
+            )
+
+        item.product_name = product.get("name", item.product_name)
+        item.size = variant.get("size", item.size)
+        item.color = variant.get("color", item.color)
+        item.price = int(variant.get("price", product.get("price", 0)))
+
+        if item.is_embroidered:
+            if not product.get("is_customizable", False):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Sản phẩm '{item.product_name}' không hỗ trợ thêu tên",
+                )
+            if not item.embroidery_name or not item.embroidery_name.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Vui lòng nhập tên võ sinh cần thêu",
+                )
+            item.embroidery_name = item.embroidery_name.strip()
+            item.embroidery_fee = settings.EMBROIDERY_FEE
+        else:
+            item.embroidery_name = None
+            item.embroidery_fee = 0
+
+        subtotal += item.price * item.quantity
+        embroidery_total += item.embroidery_fee * item.quantity
+
+    # 2b. Áp dụng mã giảm giá phía máy chủ
+    discount_amount = 0
+    voucher_code = None
+    voucher_doc = None
+    if payload.voucher_code and payload.voucher_code.strip():
+        voucher_code = payload.voucher_code.strip().upper()
+        voucher_doc = await db["vouchers"].find_one({"code": voucher_code, "is_active": True})
+        if not voucher_doc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Mã giảm giá không tồn tại hoặc đã hết hạn",
+            )
+        min_order = int(voucher_doc.get("min_order_amount", 0))
+        if subtotal < min_order:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Đơn hàng phải từ {min_order:,}₫ để dùng mã {voucher_code}".replace(",", "."),
+            )
+        usage_limit = voucher_doc.get("usage_limit")
+        if usage_limit is not None and int(voucher_doc.get("used_count", 0)) >= int(usage_limit):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Mã {voucher_code} đã hết lượt sử dụng",
+            )
+        discount_value = float(voucher_doc.get("discount_value", 0))
+        if voucher_doc.get("discount_type") == "PERCENT":
+            discount_amount = int(subtotal * discount_value / 100)
+        else:
+            discount_amount = int(discount_value)
+        discount_amount = min(discount_amount, subtotal)
 
     # 3. Tính phí vận chuyển qua ShippingProvider
     shipping_address_dict = payload.shipping_address.model_dump()
@@ -110,7 +199,7 @@ async def create_order(
         weight=0.5 * len(payload.items),
         subtotal=subtotal,
     )
-    total_amount = subtotal + embroidery_total + shipping_fee - 0
+    total_amount = max(subtotal + embroidery_total + shipping_fee - discount_amount, 0)
 
     order_code = _generate_order_code()
     user_id = token_payload.get("sub") if token_payload else None
@@ -187,7 +276,8 @@ async def create_order(
         "shipping_address": shipping_address_dict,
         "subtotal": subtotal,
         "shipping_fee": shipping_fee,
-        "discount_amount": 0,
+        "discount_amount": discount_amount,
+        "voucher_code": voucher_code,
         "embroidery_total": embroidery_total,
         "total_amount": total_amount,
         "payment_method": payload.payment_method.upper(),
@@ -201,6 +291,9 @@ async def create_order(
     }
 
     await orders_col.insert_one(order_doc)
+
+    if voucher_doc is not None:
+        await db["vouchers"].update_one({"id": voucher_doc.get("id")}, {"$inc": {"used_count": 1}})
 
     return APIResponse(
         success=True,
@@ -250,9 +343,27 @@ async def list_orders(
     )
 
 
+@router.get("/shipping-quote", response_model=APIResponse[dict])
+async def quote_shipping_fee(
+    city_province: str = Query(..., min_length=2, description="Tỉnh / Thành phố nhận hàng"),
+    subtotal: int = Query(0, ge=0, description="Tạm tính tiền hàng (VND)"),
+):
+    """Báo phí vận chuyển trước khi đặt hàng, cùng công thức với lúc tạo đơn (Mục 7)."""
+    fee = shipping_service.quote(address={"city_province": city_province}, subtotal=subtotal)
+    return APIResponse(
+        success=True,
+        message="Báo phí vận chuyển",
+        data={
+            "shipping_fee": fee,
+            "freeship_threshold": shipping_service.freeship_threshold,
+        },
+    )
+
+
 @router.get("/{order_code}", response_model=APIResponse[OrderResponse])
 async def get_order_detail(
     order_code: str,
+    phone: Optional[str] = Query(None, description="SĐT đặt hàng (bắt buộc với khách chưa đăng nhập)"),
     token_payload: Optional[dict] = Depends(get_current_user_token),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -262,12 +373,7 @@ async def get_order_detail(
     if not doc:
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
 
-    # Kiểm tra IDOR: Khách hàng chỉ xem đơn của mình
-    if token_payload:
-        user_role = token_payload.get("role", "customer")
-        user_id = token_payload.get("sub")
-        if user_role not in ["admin", "staff"] and doc.get("user_id") and doc.get("user_id") != user_id:
-            raise HTTPException(status_code=403, detail="Không có quyền truy cập đơn hàng này")
+    _check_order_access(doc, token_payload, phone)
 
     return APIResponse(
         success=True,
@@ -366,6 +472,7 @@ async def update_order_status(
 @router.post("/{order_code}/cancel", response_model=APIResponse[OrderResponse])
 async def customer_cancel_order(
     order_code: str,
+    phone: Optional[str] = Query(None, description="SĐT đặt hàng (bắt buộc với khách chưa đăng nhập)"),
     token_payload: Optional[dict] = Depends(get_current_user_token),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -379,10 +486,8 @@ async def customer_cancel_order(
     if not order:
         raise HTTPException(status_code=404, detail="Không tìm thấy đơn hàng")
 
-    # Kiểm tra quyền sở hữu
-    if token_payload and order.get("user_id"):
-        if token_payload.get("sub") != order.get("user_id"):
-            raise HTTPException(status_code=403, detail="Không có quyền hủy đơn hàng này")
+    # Kiểm tra quyền sở hữu (chủ tài khoản, nhân viên, hoặc khách nhập đúng SĐT đặt hàng)
+    _check_order_access(order, token_payload, phone)
 
     curr_status = order.get("status")
     # Cho phép hủy từ mọi trạng thái trước shipping (Mục 6)

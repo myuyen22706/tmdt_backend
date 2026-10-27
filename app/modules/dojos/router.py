@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_token, require_role
 from app.core.responses import APIResponse
@@ -231,17 +232,27 @@ async def parent_order_in_campaign(
     if campaign.get("status") != "open":
         raise HTTPException(status_code=400, detail="Đợt đặt hàng này đã đóng sổ")
 
-    # Kiểm tra sản phẩm
+    # Kiểm tra sản phẩm thuộc đợt hàng và biến thể size có thật
+    applicable_ids = campaign.get("applicable_product_ids") or []
+    if applicable_ids and payload.product_id not in applicable_ids:
+        raise HTTPException(status_code=400, detail="Sản phẩm này không thuộc đợt đặt hàng của võ đường")
     product = await products_col.find_one({"id": payload.product_id})
     if not product:
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+    variant = next((v for v in product.get("variants", []) if v.get("sku") == payload.sku), None)
+    if not variant:
+        raise HTTPException(status_code=404, detail=f"Biến thể SKU '{payload.sku}' không tồn tại")
+    payload.size = variant.get("size", payload.size)
+    payload.color = variant.get("color", payload.color)
+    if payload.is_embroidered and not (payload.embroidery_name or "").strip():
+        raise HTTPException(status_code=400, detail="Vui lòng nhập tên võ sinh cần thêu")
 
     base_price = int(product.get("price", 0))
     discount_percent = campaign.get("discount_percent", 0)
     # Giá sỉ đã chiết khấu
     discounted_price = int(base_price * (100 - discount_percent) / 100)
 
-    emb_fee = 30000 if payload.is_embroidered else 0
+    emb_fee = settings.EMBROIDERY_FEE if payload.is_embroidered else 0
     total_amount = discounted_price + emb_fee
 
     pay_method = "CLUB_CONSOLIDATED" if payload.club_consolidated_payment else "MOMO"

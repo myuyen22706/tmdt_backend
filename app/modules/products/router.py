@@ -1,9 +1,11 @@
+import asyncio
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import require_role
 from app.core.responses import APIResponse
@@ -16,6 +18,21 @@ from app.modules.products.schemas import (
 )
 
 router = APIRouter(prefix="/products", tags=["Products & Catalog (F02, F03, F16)"])
+
+# Thứ tự sắp xếp hỗ trợ cho danh mục (F02)
+SORT_SPECS = {
+    "newest": [("created_at", -1)],
+    "price_asc": [("price", 1)],
+    "price_desc": [("price", -1)],
+    "popular": [("review_count", -1), ("rating", -1)],
+    "discount": [("discount_percent", -1), ("price", 1)],
+}
+
+
+def _set_public_cache(response: Response) -> None:
+    """Cho phép trình duyệt/CDN cache ngắn các endpoint catalog công khai."""
+    max_age = settings.PUBLIC_CACHE_MAX_AGE
+    response.headers["Cache-Control"] = f"public, max-age={max_age}, stale-while-revalidate={max_age * 5}"
 
 
 def _format_product(doc: dict) -> ProductResponse:
@@ -65,6 +82,7 @@ def _format_product(doc: dict) -> ProductResponse:
 
 @router.get("", response_model=APIResponse[ProductListResponse])
 async def list_products(
+    response: Response,
     martial_art: Optional[str] = Query(None, description="Lọc theo môn: vovinam, taekwondo, karate, vo_co_truyen"),
     category: Optional[str] = Query(None, description="Lọc theo loại: vo_phuc, dai, bao_ho, tui_dung, phu_kien"),
     belt_rank: Optional[str] = Query(None, description="Lọc theo cấp đai: lam_dai, hoang_dai, dai_den..."),
@@ -73,7 +91,8 @@ async def list_products(
     min_price: Optional[int] = Query(None, ge=0, description="Khoảng giá tối thiểu (VND)"),
     max_price: Optional[int] = Query(None, ge=0, description="Khoảng giá tối đa (VND)"),
     search: Optional[str] = Query(None, description="Tìm kiếm theo tên sản phẩm"),
-    sort_by: Optional[str] = Query("newest", description="Sắp xếp: price_asc, price_desc, newest"),
+    sort_by: Optional[str] = Query("newest", description="Sắp xếp: newest, popular, discount, price_asc, price_desc"),
+    exclude_id: Optional[str] = Query(None, description="Bỏ qua một sản phẩm (dùng cho gợi ý sản phẩm liên quan)"),
     page: int = Query(1, ge=1),
     limit: int = Query(24, ge=1, le=100),
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -103,27 +122,26 @@ async def list_products(
         filter_query["price"] = price_filter
 
     # Tìm kiếm theo tên
-    if search:
-        filter_query["name"] = {"$regex": re.escape(search), "$options": "i"}
+    if search and search.strip():
+        filter_query["name"] = {"$regex": re.escape(search.strip()), "$options": "i"}
+    if exclude_id:
+        filter_query["id"] = {"$ne": exclude_id}
 
-    # Sắp xếp
-    sort_spec = [("created_at", -1)]
-    if sort_by == "price_asc":
-        sort_spec = [("price", 1)]
-    elif sort_by == "price_desc":
-        sort_spec = [("price", -1)]
-    elif sort_by == "newest":
-        sort_spec = [("created_at", -1)]
+    sort_spec = SORT_SPECS.get(sort_by or "newest", SORT_SPECS["newest"])
 
-    total = await products_col.count_documents(filter_query)
+    # Đếm và lấy trang dữ liệu song song để giảm độ trễ
     cursor = (
-        products_col.find(filter_query)
+        products_col.find(filter_query, {"_id": 0})
         .sort(sort_spec)
         .skip((page - 1) * limit)
         .limit(limit)
     )
-    docs = await cursor.to_list(length=limit)
+    total, docs = await asyncio.gather(
+        products_col.count_documents(filter_query),
+        cursor.to_list(length=limit),
+    )
     items = [_format_product(d) for d in docs]
+    _set_public_cache(response)
 
     return APIResponse(
         success=True,
@@ -133,27 +151,74 @@ async def list_products(
 
 
 @router.get("/meta/martial-arts", response_model=APIResponse[List[dict]])
-async def get_martial_arts(db: AsyncIOMotorDatabase = Depends(get_db)):
+async def get_martial_arts(response: Response, db: AsyncIOMotorDatabase = Depends(get_db)):
     """Lấy danh sách các môn võ."""
     cursor = db["martial_arts"].find({})
     items = await cursor.to_list(length=20)
     for it in items:
         it["_id"] = str(it["_id"])
+    _set_public_cache(response)
     return APIResponse(success=True, message="Danh sách môn võ", data=items)
 
 
 @router.get("/meta/categories", response_model=APIResponse[List[dict]])
-async def get_categories(db: AsyncIOMotorDatabase = Depends(get_db)):
+async def get_categories(response: Response, db: AsyncIOMotorDatabase = Depends(get_db)):
     """Lấy danh sách các loại sản phẩm."""
     cursor = db["categories"].find({})
     items = await cursor.to_list(length=20)
     for it in items:
         it["_id"] = str(it["_id"])
+    _set_public_cache(response)
     return APIResponse(success=True, message="Danh sách loại sản phẩm", data=items)
 
 
+@router.get("/meta/facets", response_model=APIResponse[dict])
+async def get_catalog_facets(response: Response, db: AsyncIOMotorDatabase = Depends(get_db)):
+    """Số lượng sản phẩm theo môn võ, loại, cấp đai và khoảng giá (phục vụ bộ lọc catalog)."""
+    products_col = db["products"]
+    active = {"is_active": True}
+
+    async def count_by(field: str) -> dict:
+        values = await products_col.distinct(field, active)
+        counts = await asyncio.gather(
+            *[products_col.count_documents({**active, field: v}) for v in values if v]
+        )
+        return {v: c for v, c in zip([v for v in values if v], counts)}
+
+    martial_arts_docs, categories_docs, by_martial_art, by_category, by_belt, total, cheapest, priciest = await asyncio.gather(
+        db["martial_arts"].find({}, {"_id": 0}).to_list(length=20),
+        db["categories"].find({}, {"_id": 0}).to_list(length=20),
+        count_by("martial_art_id"),
+        count_by("category_id"),
+        count_by("belt_rank"),
+        products_col.count_documents(active),
+        products_col.find(active, {"_id": 0, "price": 1}).sort("price", 1).limit(1).to_list(length=1),
+        products_col.find(active, {"_id": 0, "price": 1}).sort("price", -1).limit(1).to_list(length=1),
+    )
+
+    _set_public_cache(response)
+    return APIResponse(
+        success=True,
+        message="Thống kê bộ lọc danh mục",
+        data={
+            "total": total,
+            "martial_arts": [
+                {"id": m.get("id"), "name": m.get("name"), "description": m.get("description", ""), "count": by_martial_art.get(m.get("id"), 0)}
+                for m in martial_arts_docs
+            ],
+            "categories": [
+                {"id": c.get("id"), "name": c.get("name"), "count": by_category.get(c.get("id"), 0)}
+                for c in categories_docs
+            ],
+            "belt_ranks": by_belt,
+            "price_min": int(cheapest[0]["price"]) if cheapest else 0,
+            "price_max": int(priciest[0]["price"]) if priciest else 0,
+        },
+    )
+
+
 @router.get("/{id_or_slug}", response_model=APIResponse[dict])
-async def get_product_detail(id_or_slug: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def get_product_detail(id_or_slug: str, response: Response, db: AsyncIOMotorDatabase = Depends(get_db)):
     """F03: Chi tiết sản phẩm kèm ảnh, mô tả, bảng size, biến thể và trạng thái tồn kho."""
     products_col = db["products"]
     doc = await products_col.find_one({
@@ -183,6 +248,7 @@ async def get_product_detail(id_or_slug: str, db: AsyncIOMotorDatabase = Depends
         for c in charts_docs
     ]
 
+    _set_public_cache(response)
     return APIResponse(
         success=True,
         message="Lấy chi tiết sản phẩm thành công",

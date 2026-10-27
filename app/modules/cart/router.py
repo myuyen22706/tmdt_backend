@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_token
 from app.core.responses import APIResponse
@@ -15,7 +16,7 @@ from app.modules.cart.schemas import (
 
 router = APIRouter(prefix="/cart", tags=["Cart & Embroidery (F06, F07)"])
 
-EMBROIDERY_FEE_DEFAULT = 30000  # 30.000 VND / sản phẩm thêu (Mục 2 & docs/gia-dinh.md)
+EMBROIDERY_FEE_DEFAULT = settings.EMBROIDERY_FEE  # 30.000 VND / sản phẩm thêu (Mục 2 & docs/gia-dinh.md)
 
 
 def _get_cart_filter(token_payload: Optional[dict], session_id: Optional[str]) -> dict:
@@ -24,6 +25,15 @@ def _get_cart_filter(token_payload: Optional[dict], session_id: Optional[str]) -
     if session_id:
         return {"session_id": session_id}
     return {"session_id": "guest_default"}
+
+
+def _match_line(item: dict, sku: str, embroidery_name: Optional[str]) -> bool:
+    """Xác định dòng hàng theo SKU; nếu truyền tên thêu thì khớp chính xác dòng thêu đó."""
+    if item.get("sku") != sku:
+        return False
+    if embroidery_name is None:
+        return True
+    return (item.get("embroidery_name") or "") == embroidery_name
 
 
 def _calculate_cart_totals(items: list[dict]) -> CartResponse:
@@ -173,14 +183,15 @@ async def add_to_cart(
             existing_item = it
             break
 
+    same_sku_qty = sum(it.get("quantity", 0) for it in items if it.get("sku") == item_in.sku)
+    if same_sku_qty + item_in.quantity > stock:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Tổng số lượng trong giỏ ({same_sku_qty + item_in.quantity}) vượt quá tồn kho hiện có ({stock})",
+        )
+
     if existing_item:
-        new_qty = existing_item.get("quantity", 1) + item_in.quantity
-        if new_qty > stock:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Tổng số lượng trong giỏ ({new_qty}) vượt quá tồn kho hiện có ({stock})",
-            )
-        existing_item["quantity"] = new_qty
+        existing_item["quantity"] = existing_item.get("quantity", 1) + item_in.quantity
     else:
         items.append({
             "product_id": product.get("id"),
@@ -214,6 +225,7 @@ async def add_to_cart(
 async def update_cart_item_quantity(
     sku: str,
     payload: CartItemUpdate,
+    embroidery_name: Optional[str] = Query(None, description="Tên thêu của dòng hàng cần sửa (nếu có)"),
     x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
     token_payload: Optional[dict] = Depends(get_current_user_token),
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -245,9 +257,19 @@ async def update_cart_item_quantity(
         raise HTTPException(status_code=404, detail="Giỏ hàng trống")
 
     items = cart.get("items", [])
+    other_lines_qty = sum(
+        it.get("quantity", 0) for it in items
+        if it.get("sku") == sku and not _match_line(it, sku, embroidery_name)
+    )
+    if payload.quantity + other_lines_qty > stock:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Số lượng yêu cầu ({payload.quantity + other_lines_qty}) vượt quá tồn kho hiện có ({stock})",
+        )
+
     updated = False
     for it in items:
-        if it.get("sku") == sku:
+        if _match_line(it, sku, embroidery_name):
             it["quantity"] = payload.quantity
             updated = True
             break
@@ -270,6 +292,7 @@ async def update_cart_item_quantity(
 @router.delete("/items/{sku}", response_model=APIResponse[CartResponse])
 async def remove_cart_item(
     sku: str,
+    embroidery_name: Optional[str] = Query(None, description="Tên thêu của dòng hàng cần xóa (nếu có)"),
     x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
     token_payload: Optional[dict] = Depends(get_current_user_token),
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -281,7 +304,7 @@ async def remove_cart_item(
     if not cart:
         return APIResponse(success=True, message="Giỏ hàng trống", data=_calculate_cart_totals([]))
 
-    items = [it for it in cart.get("items", []) if it.get("sku") != sku]
+    items = [it for it in cart.get("items", []) if not _match_line(it, sku, embroidery_name)]
     await carts_col.update_one(
         filter_query,
         {"$set": {"items": items, "updated_at": datetime.now(timezone.utc)}},

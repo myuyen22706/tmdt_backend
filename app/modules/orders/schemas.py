@@ -15,10 +15,11 @@ class ShippingAddress(BaseModel):
 class OrderItemCreate(BaseModel):
     product_id: str
     sku: str
-    product_name: str
-    size: str
+    # Tên, size, màu và đơn giá được máy chủ lấy lại từ CSDL khi đặt hàng; giá trị client gửi chỉ để tham khảo
+    product_name: str = ""
+    size: str = ""
     color: str = "Trắng"
-    price: int = Field(..., ge=0, description="Đơn giá sản phẩm VND (số nguyên)")
+    price: int = Field(0, ge=0, description="Đơn giá sản phẩm VND (số nguyên)")
     quantity: int = Field(1, ge=1)
     is_embroidered: bool = False
     embroidery_name: Optional[str] = Field(None, max_length=20, description="Tên thêu (tối đa 20 ký tự)")
@@ -57,6 +58,7 @@ class OrderResponse(BaseModel):
     subtotal: int
     shipping_fee: int
     discount_amount: int = 0
+    voucher_code: Optional[str] = None
     embroidery_total: int = 0
     total_amount: int
     payment_method: str  # COD hoặc MoMo

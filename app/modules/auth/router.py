@@ -23,6 +23,8 @@ logger = logging.getLogger("vo_ecommerce.auth")
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Accounts (F01)"])
 
+SELF_REGISTER_ROLES = {"customer", "coach"}
+
 
 @router.post("/register", response_model=APIResponse[TokenResponse])
 async def register(user_data: UserRegister, db: AsyncIOMotorDatabase = Depends(get_db)):
@@ -49,6 +51,13 @@ async def register(user_data: UserRegister, db: AsyncIOMotorDatabase = Depends(g
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email này đã được sử dụng cho tài khoản khác",
             )
+
+    # Tự đăng ký chỉ được chọn vai trò khách hàng hoặc HLV; quyền staff/admin do quản trị viên cấp (Mục 9)
+    if user_data.role not in SELF_REGISTER_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Không thể tự đăng ký vai trò này. Vui lòng liên hệ quản trị viên.",
+        )
 
     now = datetime.now(timezone.utc)
     new_user = UserDoc(
@@ -78,6 +87,8 @@ async def register(user_data: UserRegister, db: AsyncIOMotorDatabase = Depends(g
             user_id=new_user.id,
             full_name=new_user.full_name,
             role=new_user.role,
+            phone=new_user.phone,
+            email=new_user.email,
         ),
     )
 
@@ -194,6 +205,8 @@ async def login(credentials: UserLogin, db: AsyncIOMotorDatabase = Depends(get_d
             user_id=user["id"],
             full_name=user["full_name"],
             role=user.get("role", "customer"),
+            phone=user.get("phone"),
+            email=user.get("email"),
         ),
     )
 

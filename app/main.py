@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from app.api import api_router
 from app.core.config import settings
@@ -38,6 +39,9 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+# Nén phản hồi JSON lớn (danh mục sản phẩm, báo cáo) để tải nhanh hơn trên mạng di động
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Mục 9: Security Headers & Rate Limiting Middleware
 app.add_middleware(SecurityHeadersMiddleware)
