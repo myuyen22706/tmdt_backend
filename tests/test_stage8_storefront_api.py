@@ -250,3 +250,72 @@ async def test_active_vouchers_hide_exhausted(client: AsyncClient, mock_mongo_db
     ])
     data = (await client.get("/api/v1/promotions/active")).json()["data"]
     assert [v["code"] for v in data] == ["VOVINAM10"]
+
+
+@pytest.mark.asyncio
+async def test_order_and_password_reset_send_email(client: AsyncClient, mock_mongo_db, monkeypatch):
+    """Email giao dịch (Resend): đơn có email nhận xác nhận, quên mật khẩu gửi link; dữ liệu khách được escape."""
+    import importlib
+    # Package có biến `router` trùng tên module, nên lấy module qua importlib
+    auth_router = importlib.import_module("app.modules.auth.router")
+    orders_router = importlib.import_module("app.modules.orders.router")
+
+    sent = []
+
+    async def fake_send(to, subject, html):
+        sent.append((to, subject, html))
+        return True
+
+    monkeypatch.setattr(orders_router, "send_email", fake_send)
+    monkeypatch.setattr(auth_router, "send_email", fake_send)
+
+    await mock_mongo_db["products"].insert_one(_product("prod-mail", "MAIL-S1", 200000))
+    res = await client.post("/api/v1/orders", json={
+        "customer_name": "<script>x</script>An",
+        "customer_email": "khach@example.com",
+        "shipping_address": SHIPPING,
+        "payment_method": "COD",
+        "items": [{"product_id": "prod-mail", "sku": "MAIL-S1", "quantity": 1}],
+    })
+    assert res.status_code == 200
+    code = res.json()["data"]["order_code"]
+    to, subject, html = sent[-1]
+    assert to == "khach@example.com" and code in subject
+    assert "<script>" not in html and "&lt;script&gt;" in html
+
+    # Đơn không có email thì không gửi
+    before = len(sent)
+    await client.post("/api/v1/orders", json={
+        "shipping_address": SHIPPING, "payment_method": "COD",
+        "items": [{"product_id": "prod-mail", "sku": "MAIL-S1", "quantity": 1}],
+    })
+    assert len(sent) == before
+
+    await mock_mongo_db["users"].insert_one({"id": "usr-mail", "phone": "0911000111", "email": "user@example.com", "full_name": "Bình", "is_active": True})
+    res = await client.post("/api/v1/auth/forgot-password", json={"phone": "0911000111"})
+    assert res.status_code == 200
+    to, subject, html = sent[-1]
+    user = await mock_mongo_db["users"].find_one({"id": "usr-mail"})
+    assert to == "user@example.com"
+    assert f"/reset-password?token={user['reset_token']}" in html
+
+
+@pytest.mark.asyncio
+async def test_send_email_skips_without_key():
+    """Chưa cấu hình RESEND_API_KEY thì bỏ qua, không gọi mạng, không ném lỗi."""
+    from app.core.mail import send_email
+    assert await send_email("a@example.com", "x", "<p>x</p>") is False
+
+
+@pytest.mark.asyncio
+async def test_send_email_skips_reserved_demo_domains(monkeypatch):
+    """Tài khoản mẫu dùng example.com: không gọi Resend dù đã có key."""
+    from app.core import mail
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "RESEND_API_KEY", "re_test")
+    assert mail.is_deliverable("khach@gmail.com")
+    assert mail.is_deliverable("delivered@resend.dev")
+    for addr in ("admin@example.com", "a@shop.test", "b@x.invalid", "khong-hop-le"):
+        assert not mail.is_deliverable(addr)
+    assert await mail.send_email("admin@example.com", "x", "<p>x</p>") is False

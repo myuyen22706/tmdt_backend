@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple
 from fastapi import Request, Response, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from app.core.config import settings
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -72,7 +73,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        if request.headers.get("X-Bypass-Rate-Limit") == "true":
+        # Cờ bỏ qua chỉ dành cho môi trường phát triển; production ai cũng gửi được header này
+        if settings.DEBUG and request.headers.get("X-Bypass-Rate-Limit") == "true":
             return await call_next(request)
 
         forwarded_for = request.headers.get("X-Forwarded-For")

@@ -1,10 +1,11 @@
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
-from fastapi import APIRouter, Depends
+from typing import List, Literal, Optional
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.database import get_db
+from app.core.dependencies import get_current_user
 from app.core.responses import APIResponse
 
 router = APIRouter(prefix="/reviews", tags=["Product Reviews & Sizing Feedback"])
@@ -12,11 +13,10 @@ router = APIRouter(prefix="/reviews", tags=["Product Reviews & Sizing Feedback"]
 
 class ReviewCreate(BaseModel):
     product_id: str
-    user_name: str
     rating: int = Field(5, ge=1, le=5)
-    comment: str
-    size_fit: str = Field("fit", description="tight (hơi chật), fit (vừa vặn), loose (hơi rộng)")
-    bought_size: str
+    comment: str = Field(..., min_length=1, max_length=2000)
+    size_fit: Literal["tight", "fit", "loose"] = Field("fit", description="tight (hơi chật), fit (vừa vặn), loose (hơi rộng)")
+    bought_size: str = Field(..., max_length=20)
 
 
 @router.get("")
@@ -51,14 +51,22 @@ async def list_reviews(product_id: Optional[str] = None, db: AsyncIOMotorDatabas
 
 
 @router.post("")
-async def create_review(req: ReviewCreate, db: AsyncIOMotorDatabase = Depends(get_db)):
-    """Gửi đánh giá sản phẩm kèm độ vừa vặn của size vào database MongoDB."""
+async def create_review(
+    req: ReviewCreate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Gửi đánh giá sản phẩm kèm độ vừa vặn của size (bắt buộc đăng nhập, tên lấy từ tài khoản để chống giả mạo/spam)."""
+    if not await db["products"].find_one({"id": req.product_id}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
     reviews_col = db["reviews"]
     rev_id = f"rev-{uuid.uuid4().hex[:8]}"
+    user_name = current_user.get("full_name") or "Khách hàng"
     rev_doc = {
         "id": rev_id,
         "product_id": req.product_id,
-        "user_name": req.user_name,
+        "user_id": current_user.get("id"),
+        "user_name": user_name,
         "rating": req.rating,
         "comment": req.comment,
         "size_fit": req.size_fit,
@@ -72,7 +80,7 @@ async def create_review(req: ReviewCreate, db: AsyncIOMotorDatabase = Depends(ge
         message="Gửi đánh giá thành công",
         data={
             "id": rev_id,
-            "user_name": req.user_name,
+            "user_name": user_name,
             "rating": req.rating,
             "size_fit": req.size_fit,
         },

@@ -192,3 +192,32 @@ async def test_f24_seo_organization_meta(client: AsyncClient):
     assert org_data["structured_data"]["@type"] == "LocalBusiness"
     assert org_data["structured_data"]["priceRange"] == "50.000 VND - 850.000 VND"
     assert org_data["email"] == "cskh@daitrang.vn"
+
+
+@pytest.mark.asyncio
+async def test_production_hardening_defaults(client: AsyncClient, mock_mongo_db, monkeypatch):
+    """Mục 9: khi DEBUG tắt (production) không trả reset token, không cho bỏ qua rate limit, không liệt kê đơn theo SĐT."""
+    from app.core.config import settings
+    from app.core.middleware import RateLimitMiddleware
+
+    monkeypatch.setattr(settings, "DEBUG", False)
+    monkeypatch.setattr(settings, "SECRET_KEY", "dev-insecure-secret-key-change-in-prod")
+    assert settings.insecure_secret_key() is True  # SECRET_KEY mặc định bị coi là không an toàn
+    monkeypatch.setattr(settings, "SECRET_KEY", "x" * 48)
+    assert settings.insecure_secret_key() is False
+
+    await mock_mongo_db["users"].insert_one({"id": "usr-x", "phone": "0911222333", "full_name": "A", "is_active": True})
+    res = await client.post("/api/v1/auth/forgot-password", json={"phone": "0911222333"})
+    res_unknown = await client.post("/api/v1/auth/forgot-password", json={"phone": "0911999999"})
+    assert res.json()["data"].get("dev_token") is None
+    assert res.json()["message"] == res_unknown.json()["message"]
+
+    res_orders = await client.get("/api/v1/orders", params={"phone": "0911222333"})
+    assert res_orders.status_code == 401
+
+    res_review = await client.post("/api/v1/reviews", json={"product_id": "p", "rating": 1, "comment": "x", "bought_size": "M"})
+    assert res_review.status_code == 401
+
+    RateLimitMiddleware.ip_request_history["127.0.0.1"] = [__import__("time").time()] * 200
+    res_limited = await client.get("/api/v1/products", headers={"X-Bypass-Rate-Limit": "true"})
+    assert res_limited.status_code == 429

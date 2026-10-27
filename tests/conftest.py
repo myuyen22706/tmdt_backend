@@ -10,6 +10,13 @@ from app.main import app
 
 
 @pytest.fixture(autouse=True)
+def disable_real_email(monkeypatch):
+    """Không bao giờ gửi email thật khi chạy test, kể cả khi .env có RESEND_API_KEY."""
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "RESEND_API_KEY", "")
+
+
+@pytest.fixture(autouse=True)
 def reset_rate_limit():
     """Reset bộ nhớ Rate Limiting trước mỗi test case để tránh ảnh hưởng chéo."""
     RateLimitMiddleware.reset()

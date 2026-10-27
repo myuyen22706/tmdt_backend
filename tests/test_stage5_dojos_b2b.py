@@ -135,7 +135,7 @@ async def test_f13_parent_order_in_campaign(client: AsyncClient, mock_mongo_db):
 
 
 @pytest.mark.asyncio
-async def test_f14_campaign_orders_and_export_csv(client: AsyncClient, mock_mongo_db):
+async def test_f14_campaign_orders_and_export_csv(client: AsyncClient, coach_headers, mock_mongo_db):
     """F14: Theo dõi danh sách đơn của đợt và xuất file CSV UTF-8 BOM."""
     now = datetime.now(timezone.utc)
     await mock_mongo_db["club_campaigns"].insert_one({
@@ -181,12 +181,18 @@ async def test_f14_campaign_orders_and_export_csv(client: AsyncClient, mock_mong
     ])
 
     # 1. HLV xem danh sách đơn
-    res_list = await client.get("/api/v1/dojos/campaigns/CP-CSV-EXPORT/orders")
+    # Danh sách có SĐT phụ huynh: khách vãng lai cầm mã đợt không được xem
+    res_anon = await client.get("/api/v1/dojos/campaigns/CP-CSV-EXPORT/orders")
+    assert res_anon.status_code == 401
+    res_anon_csv = await client.get("/api/v1/dojos/campaigns/CP-CSV-EXPORT/export-csv")
+    assert res_anon_csv.status_code == 401
+
+    res_list = await client.get("/api/v1/dojos/campaigns/CP-CSV-EXPORT/orders", headers=coach_headers)
     assert res_list.status_code == 200
     assert len(res_list.json()["data"]) == 2
 
     # 2. Xuất CSV
-    res_csv = await client.get("/api/v1/dojos/campaigns/CP-CSV-EXPORT/export-csv")
+    res_csv = await client.get("/api/v1/dojos/campaigns/CP-CSV-EXPORT/export-csv", headers=coach_headers)
     assert res_csv.status_code == 200
     assert "text/csv" in res_csv.headers["content-type"]
     assert "attachment; filename=" in res_csv.headers["content-disposition"]
@@ -225,7 +231,8 @@ async def test_f14_and_f15_close_campaign_consignment_and_deposit_flow(
     })
 
     # 1. Đóng đợt và gom thành 1 lô giao chung về võ đường (F14)
-    res_close = await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/close")
+    assert (await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/close")).status_code == 401
+    res_close = await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/close", headers=admin_headers)
     assert res_close.status_code == 200
     close_data = res_close.json()["data"]
     assert close_data["status"] == "closed"
@@ -233,14 +240,15 @@ async def test_f14_and_f15_close_campaign_consignment_and_deposit_flow(
     assert "batch_tracking" in close_data
 
     # 2. Võ đường tạo yêu cầu đặt cọc 50% qua MoMo (F15)
-    res_dep_momo = await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/deposit-momo")
+    res_dep_momo = await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/deposit-momo", headers=admin_headers)
     assert res_dep_momo.status_code == 200
     dep_momo_data = res_dep_momo.json()["data"]
     assert dep_momo_data["deposit_amount"] == 5000000
     assert "pay_url" in dep_momo_data
 
     # 3. Xác nhận đặt cọc thành công
-    res_confirm_dep = await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/confirm-deposit")
+    assert (await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/confirm-deposit")).status_code == 401
+    res_confirm_dep = await client.post("/api/v1/dojos/campaigns/CP-CLOSE-TEST/confirm-deposit", headers=admin_headers)
     assert res_confirm_dep.status_code == 200
     assert res_confirm_dep.json()["data"]["deposit_paid"] is True
 

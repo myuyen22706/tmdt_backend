@@ -19,6 +19,10 @@ from app.modules.dojos.schemas import (
 )
 from app.modules.payments.momo import create_momo_payment
 
+# Quản lý đợt hàng (xem/xuất danh sách học viên kèm SĐT phụ huynh, chốt đợt, đặt cọc): HLV và nhân viên.
+# Mã đợt được chia sẻ công khai cho phụ huynh nên không thể dùng mã làm "chìa khóa".
+CAMPAIGN_MANAGERS = ["coach", "admin", "staff"]
+
 router = APIRouter(prefix="/dojos", tags=["Dojos & B2B Campaigns (F11 - F15)"])
 
 
@@ -136,7 +140,7 @@ async def approve_club(
 @router.post("/campaigns", response_model=APIResponse[CampaignResponse])
 async def create_campaign(
     payload: CampaignCreate,
-    token_payload: Optional[dict] = Depends(get_current_user_token),
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """F12: Huấn luyện viên tạo đợt đặt hàng chung.
@@ -321,7 +325,7 @@ async def parent_order_in_campaign(
 @router.get("/campaigns/{code}/orders", response_model=APIResponse[List[StudentOrderResponse]])
 async def list_campaign_orders(
     code: str,
-    token_payload: Optional[dict] = Depends(get_current_user_token),
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """F14: Huấn luyện viên theo dõi danh sách học viên đặt hàng của đợt."""
@@ -359,7 +363,11 @@ async def list_campaign_orders(
 
 
 @router.get("/campaigns/{code}/export-csv")
-async def export_campaign_orders_csv(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def export_campaign_orders_csv(
+    code: str,
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F14: Xuất danh sách đơn của đợt thành file CSV (hỗ trợ tiếng Việt UTF-8 BOM)."""
     campaigns_col = db["club_campaigns"]
     student_orders_col = db["student_orders"]
@@ -422,7 +430,11 @@ async def export_campaign_orders_csv(code: str, db: AsyncIOMotorDatabase = Depen
 
 
 @router.post("/campaigns/{code}/close", response_model=APIResponse[dict])
-async def close_campaign_and_create_batch(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def close_campaign_and_create_batch(
+    code: str,
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F14: Đóng đợt đặt hàng và gom thành một lô giao chung về võ đường."""
     campaigns_col = db["club_campaigns"]
     clubs_col = db["clubs"]
@@ -479,7 +491,11 @@ async def close_campaign_and_create_batch(code: str, db: AsyncIOMotorDatabase = 
 # ==============================================================================
 
 @router.post("/campaigns/{code}/deposit-momo", response_model=APIResponse[dict])
-async def deposit_campaign_momo(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def deposit_campaign_momo(
+    code: str,
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F15: Võ đường đặt cọc 50% qua MoMo khi đóng đợt."""
     campaigns_col = db["club_campaigns"]
     campaign = await campaigns_col.find_one({"$or": [{"campaign_code": code}, {"id": code}]})
@@ -509,7 +525,11 @@ async def deposit_campaign_momo(code: str, db: AsyncIOMotorDatabase = Depends(ge
 
 
 @router.post("/campaigns/{code}/confirm-deposit", response_model=APIResponse[dict])
-async def confirm_deposit(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def confirm_deposit(
+    code: str,
+    current_user: dict = Depends(require_role(["admin", "staff"])),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F15: Xác nhận võ đường đã hoàn tất đặt cọc 50%."""
     campaigns_col = db["club_campaigns"]
     now = datetime.now(timezone.utc)

@@ -3,7 +3,7 @@
 ## 1. Cấu hình đã được chuẩn bị sẵn
 - `Dockerfile` & `railway.json`: Khởi chạy ứng dụng qua Uvicorn gắn với biến `$PORT` của Railway và có Healthcheck tại `/`.
 - `Procfile` & `runtime.txt`: Dự phòng cho Nixpacks/Railpack.
-- Tự động khởi tạo Indexes & Seed dữ liệu mẫu (`AUTO_SEED_DB=True`) khi database rỗng.
+- Tự động khởi tạo Indexes khi khởi động. Không còn tự nạp dữ liệu mẫu: database Atlas đã có sẵn dữ liệu.
 - Hỗ trợ CORS cho toàn bộ domain `*.vercel.app` mặc định qua `BACKEND_CORS_ORIGIN_REGEX` và danh sách `BACKEND_CORS_ORIGINS`.
 
 ## 2. Các bước Deploy trên Railway
@@ -13,7 +13,6 @@
    ```env
    ENVIRONMENT=production
    DEBUG=False
-   AUTO_SEED_DB=True
    SECRET_KEY=thay-bang-chuoi-bi-mat-dai-it-nhat-32-ky-tu
    MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority
    MONGODB_DB_NAME=vo_ecommerce_atlas

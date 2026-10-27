@@ -21,7 +21,7 @@ async def connect_to_mongo():
     db_name = settings.MONGODB_DB_NAME
 
     try:
-        logger.info(f"Đang kết nối MongoDB Atlas: {uri[:25]}.../db={db_name}")
+        logger.info(f"Đang kết nối MongoDB Atlas: {uri.split('@')[-1].split('/')[0]}/db={db_name}")  # chỉ log host, không log tài khoản
         real_client = AsyncIOMotorClient(
             uri,
             serverSelectionTimeoutMS=4000,
@@ -36,6 +36,9 @@ async def connect_to_mongo():
         _is_mock = False
         logger.info(">>> Kết nối MongoDB Atlas thành công! <<<")
     except Exception as e:
+        # Production: dừng hẳn thay vì chạy Mongomock, tránh nhận đơn hàng rồi mất sạch dữ liệu khi khởi động lại
+        if not settings.DEBUG:
+            raise RuntimeError(f"Không kết nối được MongoDB ({e}). Kiểm tra MONGODB_URI và Network Access trên Atlas.") from e
         logger.warning(
             f"Chưa kết nối được MongoDB Atlas ({e}). "
             "Khởi chạy chế độ Mongomock nội bộ để hệ thống hoạt động ổn định và sẵn sàng chạy test. "

@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "VÕ - Nền tảng TMĐT Võ phục & Phụ kiện"
     API_V1_STR: str = "/api/v1"
     ENVIRONMENT: str = "development"
-    DEBUG: bool = True
+    # Mặc định tắt: DEBUG=True trả token đặt lại mật khẩu trong response và cho phép bỏ qua rate limit.
+    # Chỉ bật trong .env khi chạy local.
+    DEBUG: bool = False
 
     # URLs cho Frontend & Backend (phục vụ tạo link chia sẻ, SEO, Redirect)
     FRONTEND_URL: str = "http://localhost:3000"
@@ -39,9 +41,6 @@ class Settings(BaseSettings):
             return v
         return ["*"]
 
-    # Tự động nạp dữ liệu mẫu khi database rỗng
-    AUTO_SEED_DB: bool = True
-
 
     # JWT Security
     SECRET_KEY: str = "dev-insecure-secret-key-change-in-prod"
@@ -62,6 +61,10 @@ class Settings(BaseSettings):
     MOMO_REDIRECT_URL: str = "http://localhost:3000/orders/payment-result"
     MOMO_IPN_URL: str = "http://localhost:8000/api/v1/payments/momo/ipn"
 
+    # Email giao dịch qua Resend (xác nhận đơn, quên mật khẩu). Để trống thì bỏ qua gửi mail.
+    RESEND_API_KEY: str = ""
+    MAIL_FROM: str = "VÕ <noreply@localhost>"
+
     # Phí thêu tên võ sinh (F07), dùng chung cho giỏ hàng và đặt hàng
     EMBROIDERY_FEE: int = 30000
 
@@ -72,6 +75,13 @@ class Settings(BaseSettings):
     MAX_FAILED_LOGIN_ATTEMPTS: int = 5
     ACCOUNT_LOCKOUT_MINUTES: int = 15
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
+
+    def insecure_secret_key(self) -> bool:
+        """SECRET_KEY còn là giá trị mặc định/ví dụ hoặc quá ngắn thì JWT có thể bị giả mạo."""
+        return (
+            len(self.SECRET_KEY) < 32
+            or self.SECRET_KEY.startswith(("dev-insecure", "super-secret-key-change"))
+        )
 
     model_config = SettingsConfigDict(
         env_file=".env",

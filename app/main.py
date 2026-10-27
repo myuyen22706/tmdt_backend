@@ -13,19 +13,15 @@ from app.modules.seo.router import generate_robots_txt, generate_sitemap
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Mục 9: không cho chạy production với SECRET_KEY mặc định (ai đọc mã nguồn cũng giả mạo được JWT admin)
+    if not settings.DEBUG and settings.insecure_secret_key():
+        raise RuntimeError(
+            "SECRET_KEY chưa được cấu hình an toàn. Đặt biến môi trường SECRET_KEY ngẫu nhiên >= 32 ký tự "
+            "(ví dụ: python -c \"import secrets; print(secrets.token_urlsafe(48))\"), hoặc DEBUG=True khi chạy local."
+        )
     # Khởi tạo kết nối MongoDB và tạo các index
     await connect_to_mongo()
     await init_db()
-    if settings.AUTO_SEED_DB:
-        try:
-            database = await get_db()
-            users_count = await database["users"].count_documents({})
-            products_count = await database["products"].count_documents({})
-            if users_count == 0 or products_count == 0:
-                from app.seed_mongo import seed_data
-                await seed_data(target_db=database)
-        except Exception as e:
-            print(f"Auto-seed warning: {e}")
     yield
     await close_mongo_connection()
 

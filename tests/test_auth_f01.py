@@ -1,5 +1,6 @@
 import pytest
 from httpx import AsyncClient
+from app.core.config import settings
 
 
 @pytest.mark.asyncio
@@ -119,7 +120,7 @@ async def test_login_failed_lockout_after_5_attempts(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_forgot_and_reset_password_flow(client: AsyncClient):
+async def test_forgot_and_reset_password_flow(client: AsyncClient, monkeypatch):
     """F01: Quên mật khẩu in console và đặt lại mật khẩu mới."""
     phone = "0944444444"
     email = "quenmatkhau@example.com"
@@ -133,7 +134,8 @@ async def test_forgot_and_reset_password_flow(client: AsyncClient):
         },
     )
 
-    # Yêu cầu quên mật khẩu
+    # Yêu cầu quên mật khẩu (dev_token chỉ trả về khi DEBUG=True)
+    monkeypatch.setattr(settings, "DEBUG", True)
     forgot_res = await client.post(
         "/api/v1/auth/forgot-password",
         json={"email": email},

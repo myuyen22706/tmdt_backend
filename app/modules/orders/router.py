@@ -2,11 +2,12 @@ import random
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_token, require_role
+from app.core.mail import render_order_confirmation, send_email
 from app.core.responses import APIResponse
 from app.modules.orders.schemas import (
     OrderCreate,
@@ -93,6 +94,7 @@ def _format_order(doc: dict) -> OrderResponse:
 @router.post("", response_model=APIResponse[OrderResponse])
 async def create_order(
     payload: OrderCreate,
+    background_tasks: BackgroundTasks,
     token_payload: Optional[dict] = Depends(get_current_user_token),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
@@ -295,6 +297,15 @@ async def create_order(
     if voucher_doc is not None:
         await db["vouchers"].update_one({"id": voucher_doc.get("id")}, {"$inc": {"used_count": 1}})
 
+    # Gửi email xác nhận sau khi trả phản hồi (lỗi gửi mail không ảnh hưởng đơn hàng)
+    if order_doc.get("customer_email"):
+        background_tasks.add_task(
+            send_email,
+            order_doc["customer_email"],
+            f"Xác nhận đơn hàng {order_code} - VÕ",
+            render_order_confirmation(order_doc),
+        )
+
     return APIResponse(
         success=True,
         message="Đặt hàng thành công",
@@ -305,11 +316,10 @@ async def create_order(
 @router.get("", response_model=APIResponse[List[OrderResponse]])
 async def list_orders(
     token_payload: Optional[dict] = Depends(get_current_user_token),
-    phone: Optional[str] = Query(None, description="Tra cứu đơn hàng của khách theo SĐT"),
     status_filter: Optional[str] = Query(None, alias="status"),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """F09: Danh sách đơn hàng (Khách hàng chỉ xem đơn của mình; Hỗ trợ tra cứu theo SĐT)."""
+    """F09: Danh sách đơn hàng (bắt buộc đăng nhập; khách hàng chỉ xem đơn của mình, nhân viên xem tất cả)."""
     orders_col = db["orders"]
     query = {}
 
@@ -321,12 +331,12 @@ async def list_orders(
                 {"user_id": token_payload.get("sub")},
                 {"customer_phone": token_payload.get("phone", "")},
             ]
-    elif phone:
-        query["customer_phone"] = phone
     else:
+        # Không cho liệt kê đơn chỉ bằng SĐT: ai biết số điện thoại sẽ xem được tên, địa chỉ nhà của người đó.
+        # Khách vãng lai xem từng đơn qua GET /orders/{order_code}?phone= (cần cả mã đơn lẫn SĐT).
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Cần đăng nhập hoặc cung cấp số điện thoại để tra cứu đơn hàng",
+            detail="Vui lòng đăng nhập để xem danh sách đơn hàng, hoặc tra cứu theo mã đơn và số điện thoại",
         )
 
     if status_filter and status_filter != "all":
