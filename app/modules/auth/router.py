@@ -3,11 +3,12 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
+from app.core.mail import render_password_reset, send_email
 from app.core.responses import APIResponse
 from app.core.security import create_access_token, hash_password, verify_password
 from app.modules.auth.schemas import (
@@ -22,6 +23,8 @@ from app.modules.users.models import UserDoc, UserResponse
 logger = logging.getLogger("vo_ecommerce.auth")
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Accounts (F01)"])
+
+SELF_REGISTER_ROLES = {"customer", "coach"}
 
 
 @router.post("/register", response_model=APIResponse[TokenResponse])
@@ -49,6 +52,13 @@ async def register(user_data: UserRegister, db: AsyncIOMotorDatabase = Depends(g
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email này đã được sử dụng cho tài khoản khác",
             )
+
+    # Tự đăng ký chỉ được chọn vai trò khách hàng hoặc HLV; quyền staff/admin do quản trị viên cấp (Mục 9)
+    if user_data.role not in SELF_REGISTER_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Không thể tự đăng ký vai trò này. Vui lòng liên hệ quản trị viên.",
+        )
 
     now = datetime.now(timezone.utc)
     new_user = UserDoc(
@@ -78,6 +88,8 @@ async def register(user_data: UserRegister, db: AsyncIOMotorDatabase = Depends(g
             user_id=new_user.id,
             full_name=new_user.full_name,
             role=new_user.role,
+            phone=new_user.phone,
+            email=new_user.email,
         ),
     )
 
@@ -194,6 +206,8 @@ async def login(credentials: UserLogin, db: AsyncIOMotorDatabase = Depends(get_d
             user_id=user["id"],
             full_name=user["full_name"],
             role=user.get("role", "customer"),
+            phone=user.get("phone"),
+            email=user.get("email"),
         ),
     )
 
@@ -211,11 +225,13 @@ async def logout():
 @router.post("/forgot-password", response_model=APIResponse[dict])
 async def forgot_password(
     payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Quên mật khẩu (F01).
-    - Tạo mã / token khôi phục mật khẩu.
-    - Ở môi trường phát triển (development), in thông tin email ra console.
+    - Tạo token khôi phục (hết hạn sau PASSWORD_RESET_TOKEN_EXPIRE_MINUTES) và gửi link qua email (Resend)
+      nếu tài khoản có email.
+    - DEBUG=True: in link ra console và trả dev_token để thử nghiệm.
     """
     users_col = db["users"]
     query = {}
@@ -248,26 +264,22 @@ async def forgot_password(
         {"$set": {"reset_token": reset_token, "reset_token_expires_at": expires_at}},
     )
 
-    # In ra console ở môi trường phát triển theo đúng đặc tả F01
-    recipient = user.get("email") or user.get("phone")
-    reset_link = f"http://localhost:3000/reset-password?token={reset_token}"
-    otp_code = reset_token[:6].upper()
+    reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={reset_token}"
+    if user.get("email"):
+        background_tasks.add_task(
+            send_email,
+            user["email"],
+            "Đặt lại mật khẩu tài khoản VÕ",
+            render_password_reset(user.get("full_name", ""), reset_link, settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES),
+        )
+    # Chỉ in link ra log khi chạy local: trên production log không được chứa token đăng nhập được
+    if settings.DEBUG:
+        print(f"[F01 - DEV] Link đặt lại mật khẩu cho {user.get('phone')}: {reset_link}")
 
-    console_msg = (
-        "\n" + "=" * 60 + "\n"
-        "[F01 - DEV CONSOLE EMAIL] QUÊN MẬT KHẨU TÀI KHOẢN VÕ PHỤC\n"
-        f"Người nhận: {recipient} ({user.get('full_name')})\n"
-        f"Mã OTP xác thực: {otp_code}\n"
-        f"Đường dẫn đặt lại mật khẩu: {reset_link}\n"
-        f"Thời hạn hiệu lực: {settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES} phút\n"
-        + "=" * 60 + "\n"
-    )
-    print(console_msg)
-    logger.info(console_msg)
-
+    # Cùng thông báo với nhánh không tìm thấy tài khoản để không lộ số điện thoại/email nào đã đăng ký
     return APIResponse(
         success=True,
-        message="Mã khôi phục đã được gửi. Ở môi trường phát triển, vui lòng xem console log.",
+        message="Nếu tài khoản tồn tại trong hệ thống, hướng dẫn khôi phục mật khẩu đã được gửi.",
         data={"sent": True, "dev_token": reset_token if settings.DEBUG else None},
     )
 

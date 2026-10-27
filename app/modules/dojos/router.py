@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_user_token, require_role
 from app.core.responses import APIResponse
@@ -17,6 +18,10 @@ from app.modules.dojos.schemas import (
     StudentOrderResponse,
 )
 from app.modules.payments.momo import create_momo_payment
+
+# Quản lý đợt hàng (xem/xuất danh sách học viên kèm SĐT phụ huynh, chốt đợt, đặt cọc): HLV và nhân viên.
+# Mã đợt được chia sẻ công khai cho phụ huynh nên không thể dùng mã làm "chìa khóa".
+CAMPAIGN_MANAGERS = ["coach", "admin", "staff"]
 
 router = APIRouter(prefix="/dojos", tags=["Dojos & B2B Campaigns (F11 - F15)"])
 
@@ -135,7 +140,7 @@ async def approve_club(
 @router.post("/campaigns", response_model=APIResponse[CampaignResponse])
 async def create_campaign(
     payload: CampaignCreate,
-    token_payload: Optional[dict] = Depends(get_current_user_token),
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """F12: Huấn luyện viên tạo đợt đặt hàng chung.
@@ -157,7 +162,8 @@ async def create_campaign(
 
     discount_percent = _calculate_discount_tier(payload.target_quantity)
     code = f"CP-{club.get('martial_art_id', 'VO')[:3].upper()}-{datetime.now().strftime('%Y%m')}-{uuid.uuid4().hex[:4].upper()}"
-    campaign_url = f"http://localhost:3000/clubs/campaign/{code}"
+    from app.core.config import settings
+    campaign_url = f"{settings.FRONTEND_URL.rstrip('/')}/clubs/campaign/{code}"
     qr_code_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={campaign_url}"
 
     campaign_id = f"cmp-{uuid.uuid4().hex[:8]}"
@@ -230,17 +236,27 @@ async def parent_order_in_campaign(
     if campaign.get("status") != "open":
         raise HTTPException(status_code=400, detail="Đợt đặt hàng này đã đóng sổ")
 
-    # Kiểm tra sản phẩm
+    # Kiểm tra sản phẩm thuộc đợt hàng và biến thể size có thật
+    applicable_ids = campaign.get("applicable_product_ids") or []
+    if applicable_ids and payload.product_id not in applicable_ids:
+        raise HTTPException(status_code=400, detail="Sản phẩm này không thuộc đợt đặt hàng của võ đường")
     product = await products_col.find_one({"id": payload.product_id})
     if not product:
         raise HTTPException(status_code=404, detail="Sản phẩm không tồn tại")
+    variant = next((v for v in product.get("variants", []) if v.get("sku") == payload.sku), None)
+    if not variant:
+        raise HTTPException(status_code=404, detail=f"Biến thể SKU '{payload.sku}' không tồn tại")
+    payload.size = variant.get("size", payload.size)
+    payload.color = variant.get("color", payload.color)
+    if payload.is_embroidered and not (payload.embroidery_name or "").strip():
+        raise HTTPException(status_code=400, detail="Vui lòng nhập tên võ sinh cần thêu")
 
     base_price = int(product.get("price", 0))
     discount_percent = campaign.get("discount_percent", 0)
     # Giá sỉ đã chiết khấu
     discounted_price = int(base_price * (100 - discount_percent) / 100)
 
-    emb_fee = 30000 if payload.is_embroidered else 0
+    emb_fee = settings.EMBROIDERY_FEE if payload.is_embroidered else 0
     total_amount = discounted_price + emb_fee
 
     pay_method = "CLUB_CONSOLIDATED" if payload.club_consolidated_payment else "MOMO"
@@ -309,7 +325,7 @@ async def parent_order_in_campaign(
 @router.get("/campaigns/{code}/orders", response_model=APIResponse[List[StudentOrderResponse]])
 async def list_campaign_orders(
     code: str,
-    token_payload: Optional[dict] = Depends(get_current_user_token),
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """F14: Huấn luyện viên theo dõi danh sách học viên đặt hàng của đợt."""
@@ -347,7 +363,11 @@ async def list_campaign_orders(
 
 
 @router.get("/campaigns/{code}/export-csv")
-async def export_campaign_orders_csv(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def export_campaign_orders_csv(
+    code: str,
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F14: Xuất danh sách đơn của đợt thành file CSV (hỗ trợ tiếng Việt UTF-8 BOM)."""
     campaigns_col = db["club_campaigns"]
     student_orders_col = db["student_orders"]
@@ -410,7 +430,11 @@ async def export_campaign_orders_csv(code: str, db: AsyncIOMotorDatabase = Depen
 
 
 @router.post("/campaigns/{code}/close", response_model=APIResponse[dict])
-async def close_campaign_and_create_batch(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def close_campaign_and_create_batch(
+    code: str,
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F14: Đóng đợt đặt hàng và gom thành một lô giao chung về võ đường."""
     campaigns_col = db["club_campaigns"]
     clubs_col = db["clubs"]
@@ -467,7 +491,11 @@ async def close_campaign_and_create_batch(code: str, db: AsyncIOMotorDatabase = 
 # ==============================================================================
 
 @router.post("/campaigns/{code}/deposit-momo", response_model=APIResponse[dict])
-async def deposit_campaign_momo(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def deposit_campaign_momo(
+    code: str,
+    token_payload: dict = Depends(require_role(CAMPAIGN_MANAGERS)),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F15: Võ đường đặt cọc 50% qua MoMo khi đóng đợt."""
     campaigns_col = db["club_campaigns"]
     campaign = await campaigns_col.find_one({"$or": [{"campaign_code": code}, {"id": code}]})
@@ -497,7 +525,11 @@ async def deposit_campaign_momo(code: str, db: AsyncIOMotorDatabase = Depends(ge
 
 
 @router.post("/campaigns/{code}/confirm-deposit", response_model=APIResponse[dict])
-async def confirm_deposit(code: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def confirm_deposit(
+    code: str,
+    current_user: dict = Depends(require_role(["admin", "staff"])),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     """F15: Xác nhận võ đường đã hoàn tất đặt cọc 50%."""
     campaigns_col = db["club_campaigns"]
     now = datetime.now(timezone.utc)

@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from app.api import api_router
 from app.core.config import settings
@@ -12,6 +13,12 @@ from app.modules.seo.router import generate_robots_txt, generate_sitemap
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Mục 9: không cho chạy production với SECRET_KEY mặc định (ai đọc mã nguồn cũng giả mạo được JWT admin)
+    if not settings.DEBUG and settings.insecure_secret_key():
+        raise RuntimeError(
+            "SECRET_KEY chưa được cấu hình an toàn. Đặt biến môi trường SECRET_KEY ngẫu nhiên >= 32 ký tự "
+            "(ví dụ: python -c \"import secrets; print(secrets.token_urlsafe(48))\"), hoặc DEBUG=True khi chạy local."
+        )
     # Khởi tạo kết nối MongoDB và tạo các index
     await connect_to_mongo()
     await init_db()
@@ -29,6 +36,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Nén phản hồi JSON lớn (danh mục sản phẩm, báo cáo) để tải nhanh hơn trên mạng di động
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # Mục 9: Security Headers & Rate Limiting Middleware
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware)
@@ -37,6 +47,7 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origin_regex=settings.BACKEND_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

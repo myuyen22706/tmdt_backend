@@ -31,3 +31,5 @@ class TokenResponse(BaseModel):
     user_id: str
     full_name: str
     role: str
+    phone: Optional[str] = None
+    email: Optional[str] = None

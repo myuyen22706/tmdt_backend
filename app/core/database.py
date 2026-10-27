@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import ssl
 from typing import Optional
 
 import certifi
@@ -18,29 +17,35 @@ _is_mock: bool = False
 async def connect_to_mongo():
     """Kết nối MongoDB Atlas với TLS context dùng CA bundle của certifi.
     Vì Python 3.9 trên Windows có OpenSSL cũ, bắt tay TLS 1.2+ với Atlas có thể fail
-    nếu dùng cert store mặc định của hệ thống. Dùng certifi + đồng thời ép TLS 1.2
-    tối thiểu giải quyết lỗi TLSV1_ALERT_INTERNAL_ERROR.
+    nếu dùng cert store mặc định của hệ thống. Dùng CA bundle của certifi giải quyết lỗi
+    TLSV1_ALERT_INTERNAL_ERROR. Chỉ áp dụng cho URI Atlas (mongodb+srv, luôn dùng TLS) để
+    MongoDB local không bật TLS vẫn kết nối được.
     """
     global client, db, _is_mock
     uri = settings.MONGODB_URI
     db_name = settings.MONGODB_DB_NAME
 
     try:
-        logger.info(f"Đang kết nối MongoDB Atlas: {uri[:25]}.../db={db_name}")
+        logger.info(f"Đang kết nối MongoDB Atlas: {uri.split('@')[-1].split('/')[0]}/db={db_name}")  # chỉ log host, không log tài khoản
+        tls_options = {"tlsCAFile": certifi.where()} if uri.startswith("mongodb+srv://") else {}
         real_client = AsyncIOMotorClient(
             uri,
-            tls=True,
-            tlsCAFile=certifi.where(),
             serverSelectionTimeoutMS=8000,
             connectTimeoutMS=8000,
+            **tls_options,
         )
-        # Kiểm tra kết nối thực tế bằng lệnh ping
+        # Kiểm tra kết nối thực tế bằng lệnh ping, sau đó thử một lệnh cần quyền đọc:
+        # ping vẫn thành công với MongoDB bật xác thực khi thiếu tài khoản, khiến mọi truy vấn sau đó lỗi.
         await real_client.admin.command("ping")
+        await real_client[db_name].list_collection_names()
         client = real_client
         db = client[db_name]
         _is_mock = False
         logger.info(">>> Kết nối MongoDB Atlas thành công! <<<")
     except Exception as e:
+        # Production: dừng hẳn thay vì chạy Mongomock, tránh nhận đơn hàng rồi mất sạch dữ liệu khi khởi động lại
+        if not settings.DEBUG:
+            raise RuntimeError(f"Không kết nối được MongoDB ({e}). Kiểm tra MONGODB_URI và Network Access trên Atlas.") from e
         logger.warning(
             f"Chưa kết nối được MongoDB Atlas ({e}). "
             "Khởi chạy chế độ Mongomock nội bộ để hệ thống hoạt động ổn định và sẵn sàng chạy test. "
@@ -95,6 +100,9 @@ async def init_db():
         await products_col.create_index("martial_art_id")
         await products_col.create_index("category_id")
         await products_col.create_index("price")
+        await products_col.create_index([("is_active", 1), ("martial_art_id", 1), ("category_id", 1)])
+        await products_col.create_index([("is_active", 1), ("created_at", -1)])
+        await products_col.create_index("variants.sku")
 
         # 4. Collection 'orders'
         orders_col = database["orders"]
@@ -109,6 +117,16 @@ async def init_db():
         campaigns_col = database["club_campaigns"]
         await campaigns_col.create_index("club_id")
         await campaigns_col.create_index("code", unique=True, sparse=True)
+
+        # 6. Giỏ hàng được truy vấn theo user_id / session_id ở mọi thao tác
+        carts_col = database["carts"]
+        await carts_col.create_index("user_id", sparse=True)
+        await carts_col.create_index("session_id", sparse=True)
+
+        # 7. Voucher, đánh giá, bài viết
+        await database["vouchers"].create_index("code")
+        await database["reviews"].create_index("product_id")
+        await database["blog_posts"].create_index("slug")
 
         logger.info("Khởi tạo và đánh chỉ mục (indexes) MongoDB Atlas thành công.")
     except Exception as e:
