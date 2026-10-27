@@ -390,6 +390,17 @@ async def seed_data(target_db=None):
             "is_active": True,
             "created_at": now,
         },
+        {
+            "id": "vouc-03",
+            "code": "VOSINH50K",
+            "discount_type": "FIXED",
+            "discount_value": 50000,
+            "min_order_amount": 500000,
+            "usage_limit": 100,
+            "used_count": 0,
+            "is_active": True,
+            "created_at": now,
+        },
     ])
 
     # 9. Nạp CLB Võ Đường & Đợt gom đơn B2B mẫu
