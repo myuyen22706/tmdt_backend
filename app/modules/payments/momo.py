@@ -4,6 +4,7 @@ import time
 import uuid
 import httpx
 from typing import Dict, Any, Optional
+from urllib.parse import urlencode
 from app.core.config import settings
 
 
@@ -126,8 +127,11 @@ async def create_momo_payment(order_id: str, amount: int, order_info: str) -> Di
 
     # Chế độ MOMO_MOCK=True để demo khi chưa có khóa thử thực tế (Mục 7)
     if settings.MOMO_MOCK:
-        mock_pay_url = f"{redirect_url}?orderId={order_id}&amount={amount}&requestId={request_id}&resultCode=0&message=Success"
-        mock_qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={mock_pay_url}"
+        # Chuyển sang trang thanh toán giả lập trên frontend; khách bấm xác nhận hoặc hủy ở đó
+        # rồi mới về redirect_url, giống luồng cổng MoMo thật
+        query = urlencode({"orderId": order_id, "amount": amount, "requestId": request_id, "orderInfo": order_info})
+        mock_pay_url = f"{settings.FRONTEND_URL.rstrip('/')}/payments/momo?{query}"
+        mock_qr_url = f"https://api.qrserver.com/v1/create-qr-code/?{urlencode({'size': '300x300', 'data': mock_pay_url})}"
         return {
             "partnerCode": partner_code,
             "orderId": order_id,

@@ -42,6 +42,9 @@ async def test_momo_create_payment_request(client: AsyncClient, customer_headers
     assert data["amount"] == 350000
     assert "pay_url" in data
     assert data["pay_url"] is not None
+    # MOMO_MOCK: phải mở trang thanh toán giả lập, không được nhảy thẳng tới kết quả thành công
+    assert "/payments/momo?" in data["pay_url"]
+    assert "resultCode" not in data["pay_url"]
 
 
 @pytest.mark.asyncio
